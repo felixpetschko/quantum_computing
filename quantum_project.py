@@ -734,3 +734,13 @@ if __name__ == "__main__":
         print(f"VALID among kept = {valid_kept_shots} / {kept_shots}  ({valid_kept_shots/kept_shots:.3f})")
     else:
         print("Postselected on checks==00: kept = 0 (no shots passed checks)")
+
+    shots = sum(counts.values())
+    baseline = shots / (2**10)
+    threshold = baseline * 2.0
+    valid_heavy = []
+    for key, ct in counts.items():
+        data10, _ = split_data_and_checks(key)
+        if predicate(data10) and ct >= threshold:
+            valid_heavy.append(data10)
+    print(f"Estimated #solutions (valid & >= {threshold:.1f} counts): {len(set(valid_heavy))}")
