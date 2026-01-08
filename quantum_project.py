@@ -459,13 +459,83 @@ def clause_to_controls(clause):
         controls.append((q1, int(bits[1])))
     return controls
 
+def expand_clauses_for_oracle(clauses, positions=range(5)):
+    """
+    Expand negative literals into OR over remaining classes, producing
+    clauses with explicit positive class assignments for those positions.
+    """
+    expanded = []
+    all_cats = ["H", "P", "+", "-"]
+
+    for clause in clauses:
+        pos_pos = {p: set() for p in positions}
+        pos_neg = {p: set() for p in positions}
+        other = {}
+
+        for feat, val in clause.items():
+            m = re.match(r"tcr_pos(\d+)_(H|P|\+|-)$", feat)
+            if not m:
+                other[feat] = val
+                continue
+            pos = int(m.group(1))
+            cat = m.group(2)
+            if pos not in pos_pos:
+                continue
+            if val == 1:
+                pos_pos[pos].add(cat)
+            else:
+                pos_neg[pos].add(cat)
+
+        base = dict(other)
+        multi_positions = []
+
+        for pos in positions:
+            allowed = set(all_cats) - pos_neg[pos]
+            if pos_pos[pos]:
+                allowed = allowed.intersection(pos_pos[pos])
+            if not allowed:
+                base = None
+                break
+            if pos_pos[pos]:
+                # already fixed by a positive literal
+                cat = next(iter(allowed))
+                base[f"tcr_pos{pos}_{cat}"] = 1
+            elif pos_neg[pos]:
+                # expand negatives into explicit positives
+                if len(allowed) == 1:
+                    cat = next(iter(allowed))
+                    base[f"tcr_pos{pos}_{cat}"] = 1
+                else:
+                    multi_positions.append((pos, sorted(allowed)))
+
+        if base is None:
+            continue
+
+        if not multi_positions:
+            expanded.append(base)
+            continue
+
+        clauses_acc = [base]
+        for pos, allowed in multi_positions:
+            next_acc = []
+            for c in clauses_acc:
+                for cat in allowed:
+                    nc = dict(c)
+                    nc[f"tcr_pos{pos}_{cat}"] = 1
+                    next_acc.append(nc)
+            clauses_acc = next_acc
+        expanded.extend(clauses_acc)
+
+    return expanded
+
 def phase_oracle_from_clauses(clauses) -> QuantumCircuit:
     """
     Phase-flip states that satisfy ANY clause.
-    Ambiguous clauses are included but only enforce exact class constraints.
+    Negative literals are expanded into OR over remaining classes.
     """
     qc = QuantumCircuit(12, name="Oracle(clauses)")
-    for clause in clauses:
+    expanded_clauses = expand_clauses_for_oracle(clauses)
+    for clause in expanded_clauses:
         controls = clause_to_controls(clause)
         if not controls:
             continue
