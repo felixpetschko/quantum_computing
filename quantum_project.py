@@ -369,6 +369,14 @@ def dnf_to_string(clauses, op_and=" & ", op_or=" | ", neg="~"):
         parts.append("(" + op_and.join(lits) + ")")
     return op_or.join(parts)
 
+def clauses_for_peptide(peptide):
+    fixed_pep = peptide_fixed_assignment(
+        peptide,
+        all_feature_names=list(X.columns),
+        plus=plus, minus=minus, hydro=hydro, polar=polar
+    )
+    return conditioned_tree_to_dnf_over_tcr(clf, list(X.columns), fixed_pep, positive_class=1)
+
 # choose an unseen peptide (string) you want rules for
 unseen_pep = "NLVPMVATV" #"CASSALASGGDTQYF" # example; use your peptide of interest
 
@@ -432,6 +440,74 @@ def peptide_charge_sign(core: str) -> str:
 
 def decode_10bit_to_classes(data10_q0_to_q9: str) -> List[str]:
     return [BITS_TO_CLASS[data10_q0_to_q9[i:i+2]] for i in range(0, 10, 2)]
+
+def clause_accepts_data10(clause, data10: str) -> bool:
+    classes = decode_10bit_to_classes(data10)
+    feats = {}
+    for pos, cls in enumerate(classes):
+        for cat in ["H", "P", "+", "-"]:
+            feats[f"tcr_pos{pos}_{cat}"] = int(cls == cat)
+    return all(feats.get(k) == v for k, v in clause.items())
+
+def predicate_from_clauses(data10: str, clauses) -> bool:
+    return any(clause_accepts_data10(c, data10) for c in clauses)
+
+def clause_to_controls(clause):
+    """
+    Convert a clause dict into exact bit controls for q0..q9.
+    Ambiguous constraints (only negatives) are ignored for now.
+    """
+    pos_to_class = {}
+    for feat, val in clause.items():
+        m = re.match(r"tcr_pos(\d+)_(H|P|\+|-)$", feat)
+        if not m:
+            continue
+        pos = int(m.group(1))
+        cat = m.group(2)
+        if val == 1:
+            if pos in pos_to_class and pos_to_class[pos] != cat:
+                return None
+            pos_to_class[pos] = cat
+
+    controls = []
+    for pos, cat in sorted(pos_to_class.items()):
+        bits = CLASS_TO_BITS[cat]
+        q0 = pos * 2
+        q1 = q0 + 1
+        controls.append((q0, int(bits[0])))
+        controls.append((q1, int(bits[1])))
+    return controls
+
+def phase_oracle_from_clauses(clauses) -> QuantumCircuit:
+    """
+    Phase-flip states that satisfy ANY clause.
+    Ambiguous clauses are included but only enforce exact class constraints.
+    """
+    qc = QuantumCircuit(12, name="Oracle(clauses)")
+    for clause in clauses:
+        controls = clause_to_controls(clause)
+        if not controls:
+            continue
+        toggled = []
+        qubits = []
+        for q, bit in controls:
+            if bit == 0:
+                qc.x(q)
+                toggled.append(q)
+            qubits.append(q)
+
+        if len(qubits) == 1:
+            qc.z(qubits[0])
+        else:
+            target = qubits[-1]
+            ctrl_rest = qubits[:-1]
+            qc.h(target)
+            qc.append(MCXGate(len(ctrl_rest)), ctrl_rest + [target])
+            qc.h(target)
+
+        for q in reversed(toggled):
+            qc.x(q)
+    return qc
 
 # -------------------------
 # Predicate (classical)
@@ -642,12 +718,36 @@ def build_grover_circuit(peptide: str, iters: int) -> QuantumCircuit:
     assert qc.num_qubits == 12
     return qc
 
+def build_grover_circuit_from_clauses(clauses, iters: int) -> QuantumCircuit:
+    oracle = phase_oracle_from_clauses(clauses)
+    diff = diffuser_on_data_10()
+
+    qc = QuantumCircuit(12, 12)
+    data = list(range(10))
+    check1, check2 = 10, 11
+
+    qc.h(data)
+    for _ in range(iters):
+        qc.append(oracle, range(12))
+        qc.append(diff, range(12))
+
+    add_anchor_parity_checks(qc, check1=check1, check2=check2)
+    qc.measure(data, list(range(10)))
+    qc.measure(check1, 10)
+    qc.measure(check2, 11)
+    return qc
+
 
 # -------------------------
 # Run (simulator) + compare to brute force
 # -------------------------
 if __name__ == "__main__":
     peptide = "GLCTLVAML"  # replace
+
+    use_clauses_oracle = True
+    if use_clauses_oracle:
+        clauses = clauses_for_peptide(peptide)
+        print(f"[clauses] Using {len(clauses)} clauses for peptide={peptide}")
 
     M, sols = brute_force_solutions(peptide, limit_print=8)
     N = 2**10
@@ -656,7 +756,12 @@ if __name__ == "__main__":
     iters = max(1, int(round((math.pi / 4) * math.sqrt(N / max(1, M)))))
     print(f"[grover] Using iters = {iters} (based on M={M})")
 
-    qc = build_grover_circuit(peptide, iters=iters)
+    if use_clauses_oracle:
+        qc = build_grover_circuit_from_clauses(clauses, iters=iters)
+        predicate = lambda data10: predicate_from_clauses(data10, clauses)
+    else:
+        qc = build_grover_circuit(peptide, iters=iters)
+        predicate = lambda data10: predicate_classical(data10, peptide)
     print("[grover] Circuit qubits:", qc.num_qubits)
 
     backend = Aer.get_backend("aer_simulator")
@@ -678,7 +783,7 @@ if __name__ == "__main__":
     print("\nTop measured results (showing check bits):")
     for key, ct in top:
         data10, checks = split_data_and_checks(key)
-        ok = predicate_classical(data10, peptide)
+        ok = predicate(data10)
         chk_ok = (checks == "00")
         tag = "VALID+CHK" if (ok and chk_ok) else ("VALID" if ok else ("CHK" if chk_ok else ""))
         print(f"{key}  {ct:4d}  q0..q9={data10}  checks(c10,c11)={checks}  {decode_10bit_to_classes(data10)}  {tag}")
@@ -687,7 +792,7 @@ if __name__ == "__main__":
     valid_shots = 0
     for key, ct in counts.items():
         data10, _ = split_data_and_checks(key)
-        if predicate_classical(data10, peptide):
+        if predicate(data10):
             valid_shots += ct
     print(f"\nVALID shots (raw) = {valid_shots} / 2048  ({valid_shots/2048:.3f})")
 
@@ -698,7 +803,7 @@ if __name__ == "__main__":
         data10, checks = split_data_and_checks(key)
         if checks == "00":
             kept_shots += ct
-            if predicate_classical(data10, peptide):
+            if predicate(data10):
                 valid_kept_shots += ct
 
     if kept_shots > 0:
