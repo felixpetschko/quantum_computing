@@ -1,10 +1,16 @@
-import pandas as pd
-import numpy as np
-import scirpy as ir
+import math
+import re
+from typing import List, Tuple
 
+import numpy as np
+import pandas as pd
+import scirpy as ir
+from qiskit import QuantumCircuit, transpile
+from qiskit.circuit.library import MCXGate
+from qiskit_aer import Aer
+from sklearn.metrics import roc_auc_score, accuracy_score
 from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeClassifier, export_text
-from sklearn.metrics import roc_auc_score, accuracy_score
 
 ### Create decision tree
 
@@ -188,8 +194,6 @@ print(export_text(clf, feature_names=list(X.columns)))
 # plt.show()
 
 
-import re
-
 def cond_to_readable(feature, op, threshold):
     # expects feature like "tcr_pos3_H" or "pep_pos1_+"
     m = re.match(r"(tcr|pep)_pos(\d+)_(H|P|\+|-)$", feature)
@@ -210,8 +214,6 @@ def rules_to_dnf(rules):
         clause = " and ".join(cond_to_readable(f,op,t) for f,op,t in r["conditions"])
         clauses.append(f"({clause})")
     return " or ".join(clauses) if clauses else "False"
-
-import numpy as np
 
 def extract_tree_rules(clf, feature_names, class_names=None, target_class=1):
     """
@@ -300,8 +302,6 @@ def peptide_fixed_assignment(peptide, all_feature_names, plus, minus, hydro, pol
     return fixed
 
 
-import numpy as np
-
 def conditioned_tree_to_dnf_over_tcr(clf, feature_names, fixed_pep, positive_class=1):
     """
     Returns DNF clauses over NON-fixed features (i.e. tcr_*),
@@ -386,13 +386,6 @@ print(formula_tcr_only[0:100])
 
 
 ###quantum
-
-import math
-from typing import List, Tuple
-
-from qiskit import QuantumCircuit, transpile
-from qiskit.circuit.library import MCXGate
-from qiskit_aer import Aer
 
 # -------------------------
 # 2-bit class encoding per position
