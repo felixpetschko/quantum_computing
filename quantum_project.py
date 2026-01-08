@@ -419,25 +419,6 @@ CLASS_TO_BITS = {v: k for k, v in BITS_TO_CLASS.items()}
 # NOTE: We no longer use a phase ancilla |->. The oracle is implemented as an MCZ
 # on the data qubits (via H–MCX–H), freeing q11 for checking.
 
-CH_POS = set("KR")
-CH_NEG = set("DE")
-
-def peptide_core(peptide: str, k: int = 3) -> str:
-    p = peptide.strip().upper()
-    if len(p) <= k:
-        return p
-    start = (len(p) - k) // 2
-    return p[start:start + k]
-
-def peptide_charge_sign(core: str) -> str:
-    pos = sum(aa in CH_POS for aa in core)
-    neg = sum(aa in CH_NEG for aa in core)
-    if neg > pos:
-        return "neg"
-    if pos > neg:
-        return "pos"
-    return "none"
-
 def decode_10bit_to_classes(data10_q0_to_q9: str) -> List[str]:
     return [BITS_TO_CLASS[data10_q0_to_q9[i:i+2]] for i in range(0, 10, 2)]
 
@@ -512,138 +493,19 @@ def phase_oracle_from_clauses(clauses) -> QuantumCircuit:
 # -------------------------
 # Predicate (classical)
 # -------------------------
-def predicate_classical(data10: str, peptide: str) -> bool:
-    """
-    More biologically interpretable toy rules:
-
-    R1: pos0 == H
-    R2: pos4 == H
-    R3: pos2 == P
-    R4: peptide-conditioned electrostatic contact:
-        - if peptide core net neg -> pos1 == +
-        - if peptide core net pos -> pos1 == -
-        - if neutral -> pos1 is charged (+ or -)
-    R5: pos3 not charged (avoid overly charged core): a3 == 0
-    """
-    if len(data10) != 10 or any(ch not in "01" for ch in data10):
-        return False
-
-    # unpack bits
-    a0, b0 = int(data10[0]), int(data10[1])
-    a1, b1 = int(data10[2]), int(data10[3])
-    a2, b2 = int(data10[4]), int(data10[5])
-    a3, b3 = int(data10[6]), int(data10[7])
-    a4, b4 = int(data10[8]), int(data10[9])
-
-    # R1/R2: anchors
-    pos0_is_H = (a0 == 0 and b0 == 0)
-    pos4_is_H = (a4 == 0 and b4 == 0)
-
-    # R3: center polar (01)
-    pos2_is_P = (a2 == 0 and b2 == 1)
-
-    # R5: pos3 not charged -> a3 == 0
-    pos3_not_charged = (a3 == 0)
-
-    # R4: peptide-conditioned pos1 charge/sign
-    core = peptide_core(peptide, 3)
-    sign = peptide_charge_sign(core)
-
-    if sign == "neg":
-        # pos1 == +  (10)
-        pos1_ok = (a1 == 1 and b1 == 0)
-    elif sign == "pos":
-        # pos1 == -  (11)
-        pos1_ok = (a1 == 1 and b1 == 1)
-    else:
-        # neutral -> pos1 charged (a1 == 1), b1 can be 0/1
-        pos1_ok = (a1 == 1)
-
-    return pos0_is_H and pos4_is_H and pos2_is_P and pos1_ok and pos3_not_charged
-
-
-def brute_force_solutions(peptide: str, limit_print: int = 12) -> Tuple[int, List[str]]:
+def brute_force_solutions(clauses, limit_print: int = 12) -> Tuple[int, List[str]]:
     sols = []
     for x in range(2**10):
         s = format(x, "010b")  # q0..q9 order
-        if predicate_classical(s, peptide):
+        if predicate_from_clauses(s, clauses):
             sols.append(s)
 
-    print(f"[bruteforce] Peptide={peptide} core={peptide_core(peptide,3)} sign={peptide_charge_sign(peptide_core(peptide,3))}")
     print(f"[bruteforce] M = {len(sols)} solutions out of N = 1024")
     for s in sols[:limit_print]:
         print(" ", s, "->", decode_10bit_to_classes(s))
     if len(sols) > limit_print:
         print(f"... (showing first {limit_print} of {len(sols)})")
     return len(sols), sols
-
-# -------------------------
-# Quantum phase oracle for the SAME predicate (NO phase ancilla)
-# -------------------------
-def phase_oracle_predicate(peptide: str) -> QuantumCircuit:
-    """
-    Implements a phase flip on the data register iff predicate holds,
-    using an MCZ realized as H(target) - MCX(controls->target) - H(target).
-
-    Uses ONLY data qubits; q10/q11 are left untouched for checks.
-    """
-    qc = QuantumCircuit(12, name="Oracle(bio,MCZ)")
-
-    # Indices (data)
-    a0, b0 = 0, 1
-    a1, b1 = 2, 3
-    a2, b2 = 4, 5
-    a3, b3 = 6, 7
-    a4, b4 = 8, 9
-
-    # Determine which pos1 condition applies
-    core = peptide_core(peptide, 3)
-    sign = peptide_charge_sign(core)
-
-    # Apply X for 0-controls (map desired 0-literals into 1-controls)
-    qc.x(a0); qc.x(b0)  # pos0 == 00
-    qc.x(a4); qc.x(b4)  # pos4 == 00
-    qc.x(a2)            # pos2 == 01 => a2=0, b2=1
-    qc.x(a3)            # pos3 not charged => a3=0
-
-    # Base controls (must be |1> after mapping)
-    controls = [a0, b0, a4, b4, a2, b2, a3]  # b2 is required 1, no X on b2
-
-    # pos1 controls depending on peptide sign
-    if sign == "neg":
-        # pos1 == 10 => a1=1, b1=0
-        qc.x(b1)         # map b1=0 to b1=1 control
-        controls += [a1, b1]
-    elif sign == "pos":
-        # pos1 == 11 => a1=1, b1=1
-        controls += [a1, b1]
-    else:
-        # neutral => a1=1 (charged)
-        controls += [a1]
-
-    # Multi-controlled Z on all controls:
-    # pick a target qubit from the controls list; apply H-target, MCX, H-target.
-    # This phase-flips exactly when ALL controls are 1.
-    if len(controls) < 2:
-        # (Shouldn't happen here, but keep it safe.)
-        qc.z(controls[0])
-    else:
-        target = controls[-1]
-        ctrl_rest = controls[:-1]
-        qc.h(target)
-        qc.append(MCXGate(len(ctrl_rest)), ctrl_rest + [target])
-        qc.h(target)
-
-    # Uncompute X-maps
-    if sign == "neg":
-        qc.x(b1)
-
-    qc.x(a3)
-    qc.x(a2)
-    qc.x(b4); qc.x(a4)
-    qc.x(b0); qc.x(a0)
-
-    return qc
 
 # -------------------------
 # Grover diffuser on data register only (q0..q9)
@@ -690,34 +552,6 @@ def add_anchor_parity_checks(qc: QuantumCircuit, check1: int = 10, check2: int =
 # -------------------------
 # Build Grover circuit
 # -------------------------
-def build_grover_circuit(peptide: str, iters: int) -> QuantumCircuit:
-    oracle = phase_oracle_predicate(peptide)
-    diff = diffuser_on_data_10()
-
-    # Measure: 10 data bits + 2 check bits
-    qc = QuantumCircuit(12, 12)
-    data = list(range(10))
-    check1, check2 = 10, 11
-
-    # data superposition
-    qc.h(data)
-
-    for _ in range(iters):
-        qc.append(oracle, range(12))
-        qc.append(diff, range(12))
-
-    # Compute check bits at the end (error detection via postselection)
-    add_anchor_parity_checks(qc, check1=check1, check2=check2)
-
-    # Measure q0..q9 -> c0..c9
-    qc.measure(data, list(range(10)))
-    # Measure checks -> c10,c11
-    qc.measure(check1, 10)
-    qc.measure(check2, 11)
-
-    assert qc.num_qubits == 12
-    return qc
-
 def build_grover_circuit_from_clauses(clauses, iters: int) -> QuantumCircuit:
     oracle = phase_oracle_from_clauses(clauses)
     diff = diffuser_on_data_10()
@@ -744,24 +578,18 @@ def build_grover_circuit_from_clauses(clauses, iters: int) -> QuantumCircuit:
 if __name__ == "__main__":
     peptide = "GLCTLVAML"  # replace
 
-    use_clauses_oracle = True
-    if use_clauses_oracle:
-        clauses = clauses_for_peptide(peptide)
-        print(f"[clauses] Using {len(clauses)} clauses for peptide={peptide}")
+    clauses = clauses_for_peptide(peptide)
+    print(f"[clauses] Using {len(clauses)} clauses for peptide={peptide}")
 
-    M, sols = brute_force_solutions(peptide, limit_print=8)
+    M, sols = brute_force_solutions(clauses, limit_print=8)
     N = 2**10
 
     # Good iteration heuristic
     iters = max(1, int(round((math.pi / 4) * math.sqrt(N / max(1, M)))))
     print(f"[grover] Using iters = {iters} (based on M={M})")
 
-    if use_clauses_oracle:
-        qc = build_grover_circuit_from_clauses(clauses, iters=iters)
-        predicate = lambda data10: predicate_from_clauses(data10, clauses)
-    else:
-        qc = build_grover_circuit(peptide, iters=iters)
-        predicate = lambda data10: predicate_classical(data10, peptide)
+    qc = build_grover_circuit_from_clauses(clauses, iters=iters)
+    predicate = lambda data10: predicate_from_clauses(data10, clauses)
     print("[grover] Circuit qubits:", qc.num_qubits)
 
     backend = Aer.get_backend("aer_simulator")
