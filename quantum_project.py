@@ -193,6 +193,30 @@ if VISUALIZE_TREE:
     plt.savefig("decision_tree.png", dpi=300, bbox_inches="tight")
     plt.show()
 
+SHOW_CONFUSION_MATRIX = False
+if SHOW_CONFUSION_MATRIX:
+    from sklearn.metrics import confusion_matrix
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    cm = confusion_matrix(y_test, y_pred, labels=clf.classes_)
+    fig, ax = plt.subplots(figsize=(8, 6))
+    sns.heatmap(
+        cm,
+        annot=True,
+        fmt="d",
+        cmap="Blues",
+        cbar=False,
+        xticklabels=["nonbinder", "binder"],
+        yticklabels=["nonbinder", "binder"],
+        ax=ax,
+    )
+    plt.xlabel("Predicted Label")
+    plt.ylabel("True Label")
+    plt.title("Confusion Matrix")
+    plt.savefig("confusion_matrix.png", dpi=300, bbox_inches="tight")
+    plt.show()
+
 
 def cond_to_readable(feature, op, threshold):
     # expects feature like "tcr_pos3_H" or "pep_pos1_+"
