@@ -174,24 +174,24 @@ print("Unseen-epitope AUC:     ", roc_auc_score(y_test, y_prob))
 print("\nLearned rules:\n")
 print(export_text(clf, feature_names=list(X.columns)))
 
+VISUALIZE_TREE = False
+if VISUALIZE_TREE:
+    import matplotlib.pyplot as plt
+    from sklearn.tree import plot_tree
 
-
-# ###visualize decision tree
-
-# import matplotlib.pyplot as plt
-# from sklearn.tree import plot_tree
-
-# plt.figure(figsize=(50, 20)) # Aumenta l'altezza rispetto alla larghezza per una visualizzazione più verticale
-# plot_tree(clf,
-#           feature_names=X.columns,
-#           class_names=['nonbinder', 'binder'],
-#           filled=True,
-#           rounded=True,
-#           proportion=True,
-#           fontsize=20)
-# plt.title("Decision Tree Classifier for CDR3 Binding (Vertical Layout)", fontsize=16)
-# plt.savefig("decision_tree.png", dpi=300, bbox_inches="tight")
-# plt.show()
+    plt.figure(figsize=(50, 20))  # Taller layout for readability
+    plot_tree(
+        clf,
+        feature_names=X.columns,
+        class_names=["nonbinder", "binder"],
+        filled=True,
+        rounded=True,
+        proportion=True,
+        fontsize=20,
+    )
+    plt.title("Decision Tree Classifier for CDR3 Binding (Vertical Layout)", fontsize=16)
+    plt.savefig("decision_tree.png", dpi=300, bbox_inches="tight")
+    plt.show()
 
 
 def cond_to_readable(feature, op, threshold):
