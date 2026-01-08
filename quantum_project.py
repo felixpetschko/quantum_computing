@@ -170,18 +170,219 @@ print(export_text(clf, feature_names=list(X.columns)))
 
 
 
-###visualize decision tree
+# ###visualize decision tree
 
-import matplotlib.pyplot as plt
-from sklearn.tree import plot_tree
+# import matplotlib.pyplot as plt
+# from sklearn.tree import plot_tree
 
-plt.figure(figsize=(50, 20)) # Aumenta l'altezza rispetto alla larghezza per una visualizzazione più verticale
-plot_tree(clf,
-          feature_names=X.columns,
-          class_names=['nonbinder', 'binder'],
-          filled=True,
-          rounded=True,
-          proportion=True,
-          fontsize=20)
-plt.title("Decision Tree Classifier for CDR3 Binding (Vertical Layout)", fontsize=16)
-plt.show()
+# plt.figure(figsize=(50, 20)) # Aumenta l'altezza rispetto alla larghezza per una visualizzazione più verticale
+# plot_tree(clf,
+#           feature_names=X.columns,
+#           class_names=['nonbinder', 'binder'],
+#           filled=True,
+#           rounded=True,
+#           proportion=True,
+#           fontsize=20)
+# plt.title("Decision Tree Classifier for CDR3 Binding (Vertical Layout)", fontsize=16)
+# plt.savefig("decision_tree.png", dpi=300, bbox_inches="tight")
+# plt.show()
+
+
+import re
+
+def cond_to_readable(feature, op, threshold):
+    # expects feature like "tcr_pos3_H" or "pep_pos1_+"
+    m = re.match(r"(tcr|pep)_pos(\d+)_(H|P|\+|-)$", feature)
+    if m and abs(threshold - 0.5) < 1e-6:
+        prefix = m.group(1)
+        pos = int(m.group(2))
+        grp = m.group(3)
+        if op == ">":
+            return f"({prefix}_pos{pos} == '{grp}')"
+        else:  # "<="
+            return f"({prefix}_pos{pos} != '{grp}')"
+    # fallback
+    return f"({feature} {op} {threshold:g})"
+
+def rules_to_dnf(rules):
+    clauses = []
+    for r in rules:
+        clause = " and ".join(cond_to_readable(f,op,t) for f,op,t in r["conditions"])
+        clauses.append(f"({clause})")
+    return " or ".join(clauses) if clauses else "False"
+
+import numpy as np
+
+def extract_tree_rules(clf, feature_names, class_names=None, target_class=1):
+    """
+    Extract root->leaf rules from a fitted sklearn DecisionTreeClassifier.
+
+    Returns a list of dicts:
+      {
+        "class": predicted_class,
+        "class_name": ...,
+        "conditions": [(feature, op, threshold), ...],
+        "n_samples": int,
+        "value": class_counts (array),
+        "proba": class_probabilities (array)
+      }
+    """
+    tree = clf.tree_
+    feat = tree.feature
+    thr = tree.threshold
+    children_left = tree.children_left
+    children_right = tree.children_right
+    value = tree.value  # shape: (n_nodes, 1, n_classes)
+    n_node_samples = tree.n_node_samples
+
+    rules = []
+
+    def recurse(node, path):
+        is_leaf = (children_left[node] == children_right[node])
+        if is_leaf:
+            counts = value[node][0]
+            pred_class = int(np.argmax(counts))
+            if pred_class == target_class:
+                probs = counts / counts.sum() if counts.sum() > 0 else counts
+                rules.append({
+                    "class": pred_class,
+                    "class_name": class_names[pred_class] if class_names else str(pred_class),
+                    "conditions": path.copy(),
+                    "n_samples": int(n_node_samples[node]),
+                    "value": counts.copy(),
+                    "proba": probs.copy(),
+                })
+            return
+
+        f_idx = feat[node]
+        f_name = feature_names[f_idx]
+        t = thr[node]
+
+        # left: feature <= threshold
+        recurse(children_left[node], path + [(f_name, "<=", float(t))])
+
+        # right: feature > threshold
+        recurse(children_right[node], path + [(f_name, ">", float(t))])
+
+    recurse(0, [])
+    return rules
+
+feature_names = list(X.columns)
+rules = extract_tree_rules(clf, feature_names, class_names=["nonbinder","binder"], target_class=1)
+
+for i, r in enumerate(rules, 1):
+    print(f"\nRule {i} (n={r['n_samples']}, proba={r['proba']}):")
+    for f, op, t in r["conditions"]:
+        print("  ", cond_to_readable(f, op, t))
+
+print("\nDNF:")
+print(rules_to_dnf(rules)[0:100])
+
+
+def peptide_fixed_assignment(peptide, all_feature_names, plus, minus, hydro, polar):
+    def aa2grp(a):
+        if a in plus:  return "+"
+        if a in minus: return "-"
+        if a in hydro: return "H"
+        return "P"
+
+    # Start with all pep_* features set to 0
+    fixed = {fn: 0 for fn in all_feature_names if fn.startswith("pep_")}
+
+    # Set the 1s for positions that exist in this peptide
+    for i, a in enumerate(peptide):
+        g = aa2grp(a)
+        for cat in ["H", "P", "+", "-"]:
+            name = f"pep_pos{i}_{cat}"
+            if name in fixed:
+                fixed[name] = int(g == cat)
+
+    return fixed
+
+
+import numpy as np
+
+def conditioned_tree_to_dnf_over_tcr(clf, feature_names, fixed_pep, positive_class=1):
+    """
+    Returns DNF clauses over NON-fixed features (i.e. tcr_*),
+    by following peptide splits deterministically.
+    Each clause: dict {feature_name: 0/1}
+    Whole formula: OR over clauses.
+    """
+    tree = clf.tree_
+    feat = tree.feature
+    thr = tree.threshold
+    left = tree.children_left
+    right = tree.children_right
+    value = tree.value
+
+    clauses = []
+
+    def is_leaf(n):
+        return left[n] == right[n] == -1
+
+    def leaf_class(n):
+        return int(np.argmax(value[n][0]))
+
+    def go(n, constraints):
+        if is_leaf(n):
+            if leaf_class(n) == positive_class:
+                clause = {}
+                ok = True
+                for name, val in constraints:
+                    if name in clause and clause[name] != val:
+                        ok = False
+                        break
+                    clause[name] = val
+                if ok:
+                    clauses.append(clause)
+            return
+
+        fidx = feat[n]
+        name = feature_names[fidx]
+        t = thr[n]
+
+        # (Your features are 0/1, so thresholds are basically 0.5)
+        if name in fixed_pep:
+            v = fixed_pep[name]
+            # left: x <= t  (v==0 for t=0.5), right: x > t (v==1)
+            if v <= t:
+                go(left[n], constraints)
+            else:
+                go(right[n], constraints)
+        else:
+            # keep this split as a boolean literal in the clause
+            go(left[n],  constraints + [(name, 0)])
+            go(right[n], constraints + [(name, 1)])
+
+    go(0, [])
+    # Optionally: filter to only tcr_ literals (should already be, if fixed_pep covers all pep_)
+    clauses = [{k:v for k,v in c.items() if k.startswith("tcr_")} for c in clauses]
+    return clauses
+
+def dnf_to_string(clauses, op_and=" & ", op_or=" | ", neg="~"):
+    if not clauses:
+        return "FALSE"
+    parts = []
+    for clause in clauses:
+        lits = [(k if v == 1 else f"{neg}{k}") for k, v in sorted(clause.items())]
+        parts.append("(" + op_and.join(lits) + ")")
+    return op_or.join(parts)
+
+# choose an unseen peptide (string) you want rules for
+unseen_pep = "NLVPMVATV" #"CASSALASGGDTQYF" # example; use your peptide of interest
+
+fixed_pep = peptide_fixed_assignment(
+    unseen_pep,
+    all_feature_names=list(X.columns),
+    plus=plus, minus=minus, hydro=hydro, polar=polar
+)
+
+clauses_tcr = conditioned_tree_to_dnf_over_tcr(clf, list(X.columns), fixed_pep, positive_class=1)
+formula_tcr_only = dnf_to_string(clauses_tcr)
+
+print("Number of positive clauses (for this peptide):", len(clauses_tcr))
+print(formula_tcr_only[0:100])
+
+
+
