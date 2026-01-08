@@ -12,6 +12,9 @@ from sklearn.metrics import roc_auc_score, accuracy_score
 from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeClassifier, export_text
 
+VISUALIZE_TREE = False
+SHOW_CONFUSION_MATRIX = False
+
 ### Create decision tree
 
 # ------------------------------------------------------------
@@ -174,7 +177,6 @@ print("Unseen-epitope AUC:     ", roc_auc_score(y_test, y_prob))
 print("\nLearned rules:\n")
 print(export_text(clf, feature_names=list(X.columns)))
 
-VISUALIZE_TREE = False
 if VISUALIZE_TREE:
     import matplotlib.pyplot as plt
     from sklearn.tree import plot_tree
@@ -193,7 +195,6 @@ if VISUALIZE_TREE:
     plt.savefig("decision_tree.png", dpi=300, bbox_inches="tight")
     plt.show()
 
-SHOW_CONFUSION_MATRIX = False
 if SHOW_CONFUSION_MATRIX:
     from sklearn.metrics import confusion_matrix
     import matplotlib.pyplot as plt
