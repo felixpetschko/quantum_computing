@@ -158,7 +158,7 @@ y_train, y_test = y[train_mask], y[test_mask]
 # 8) Train interpretable model
 # ------------------------------------------------------------
 clf = DecisionTreeClassifier(
-    max_depth=20,
+    max_depth=7,
     min_samples_leaf=2,
     random_state=0
 )
@@ -403,7 +403,7 @@ def clauses_for_peptide(peptide):
     return conditioned_tree_to_dnf_over_tcr(clf, list(X.columns), fixed_pep, positive_class=1)
 
 # choose an unseen peptide (string) you want rules for
-unseen_pep = "NLVPMVATV" #"CASSALASGGDTQYF" # example; use your peptide of interest
+unseen_pep = "GLCTLVAML" #"CASSALASGGDTQYF" # example; use your peptide of interest
 
 fixed_pep = peptide_fixed_assignment(
     unseen_pep,
