@@ -760,3 +760,89 @@ if __name__ == "__main__":
         if predicate(data10) and ct >= threshold:
             valid_heavy.append(data10)
     print(f"Estimated #solutions (valid & >= {threshold:.1f} counts): {len(set(valid_heavy))}")
+
+    aa_validation = pd.read_csv("./aa_table.csv", index_col=0)
+    aa_map_short_to_1_letter = {
+        'Cys': 'C', 'Met': 'M', 'Phe': 'F', 'Ile': 'I', 'Leu': 'L', 'Val': 'V',
+        'Trp': 'W', 'Tyr': 'Y', 'Ala': 'A', 'Gly': 'G', 'Thr': 'T', 'Ser': 'S',
+        'Asn': 'N', 'Gln': 'Q', 'Asp': 'D', 'Glu': 'E', 'His': 'H', 'Arg': 'R',
+        'Lys': 'K', 'Pro': 'P'
+    }
+
+    aa_validation_1_letter = aa_validation.rename(index=aa_map_short_to_1_letter, columns=aa_map_short_to_1_letter)
+
+    aa_categories = pd.DataFrame({
+        'Amino Acid': aa_validation.index,
+        'Category': [aa2grp(aa_map_short_to_1_letter[aa]) for aa in aa_validation.index]
+    })
+
+    # Create a mapping from single-letter amino acid codes to their categories
+    single_letter_to_category_map = {
+        aa_map_short_to_1_letter[aa_name]: category
+        for aa_name, category in zip(aa_categories['Amino Acid'], aa_categories['Category'])
+    }
+
+    # Define the categories
+    categories = ['H', 'P', '+', '-']
+
+    # Initialize an empty DataFrame for the category-averaged matrix
+    category_avg_matrix = pd.DataFrame(index=categories, columns=categories, dtype=float)
+
+    # Populate the matrix by calculating averages for each category pair
+    for row_cat in categories:
+        # Get all single-letter AAs belonging to the current row category
+        row_aas = [aa_char for aa_char, cat in single_letter_to_category_map.items() if cat == row_cat]
+
+        for col_cat in categories:
+            # Get all single-letter AAs belonging to the current column category
+            col_aas = [aa_char for aa_char, cat in single_letter_to_category_map.items() if cat == col_cat]
+
+            # Ensure there are amino acids for both categories before attempting to slice
+            if row_aas and col_aas:
+                # Extract the sub-matrix of interaction energies
+                sub_matrix = aa_validation_1_letter.loc[row_aas, col_aas]
+
+                # Calculate the average and store it in the new matrix
+                category_avg_matrix.loc[row_cat, col_cat] = sub_matrix.mean().mean()
+            else:
+                # If no amino acids exist for a category, set the value to NaN
+                category_avg_matrix.loc[row_cat, col_cat] = float('nan')
+    category_avg_matrix_abs= np.abs(category_avg_matrix)
+
+    start_index = (len(peptide) - 5) // 2
+    end_index = start_index + 5
+
+    # 3. Extract this 5-amino acid core
+    peptide_5_core = peptide[start_index:end_index]
+    print(f"Original peptide: {peptide}")
+    print(f"Extracted 5-amino acid core: {peptide_5_core}")
+
+    # 4. For each amino acid in the peptide_5_core, convert it into its category
+    # 5. Store these 5 categories in a list
+    peptide_5_core_categories = [aa2grp(aa) for aa in peptide_5_core]
+
+    def score_solution(solution_bits: str, peptide_core_categories: List[str]) -> float:
+        decoded_categories = decode_10bit_to_classes(solution_bits)
+        score = 0.0
+        for i in range(5):
+            sol_cat = decoded_categories[i]
+            core_cat = peptide_core_categories[i]
+            # Get interaction energy from the absolute value matrix
+            interaction_energy = category_avg_matrix_abs.loc[sol_cat, core_cat]
+            score += interaction_energy
+        return score
+
+    # Apply the scoring function to the sols list
+    scored_solutions = []
+    for sol_str in sols:
+        score = score_solution(sol_str, peptide_5_core_categories)
+        scored_solutions.append((sol_str, score))
+
+    # Rank solutions by score in descending order
+    ranked_solutions = sorted(scored_solutions, key=lambda x: x[1], reverse=True)
+
+    # Print each ranked solution
+    print("\nRanked Solutions by BIO score (descending):")
+    for sol_str, score in ranked_solutions:
+        decoded_cats = decode_10bit_to_classes(sol_str)
+        print(f"Solution: {sol_str} -> Decoded: {decoded_cats} -> Score: {score:.3f} BIO")
