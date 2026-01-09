@@ -837,3 +837,25 @@ if __name__ == "__main__":
             f"{key}  {ct:4d}  q0..q9={data10}  checks(c10,c11)={checks}  "
             f"{decode_10bit_to_classes(data10)}  {tag}  BIO={bio_score:.3f}"
         )
+
+    #### select the solution with highest measurement among valid+checked and the highest bio score
+    valid_checked_solutions = []
+    for key, ct in counts.items():
+        data10, checks = split_data_and_checks(key)
+        if predicate(data10) and checks == "00":
+            bio_score = score_solution(data10, peptide_5_core_categories)
+            valid_checked_solutions.append((data10, ct, bio_score))
+    if valid_checked_solutions:
+        best_solution = max(valid_checked_solutions, key=lambda x: (x[1], x[2]))
+        best_data10, best_count, best_bio_score = best_solution
+        print(
+            f"\nBest valid+checked solution: q0..q9={best_data10}  "
+            f"{decode_10bit_to_classes(best_data10)}  count={best_count}  BIO={best_bio_score:.3f}"
+        )
+
+
+
+
+
+    
+    

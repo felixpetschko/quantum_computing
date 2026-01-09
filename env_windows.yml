@@ -1,0 +1,16 @@
+name: quantum-env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - numpy
+  - h5py
+  - pandas
+  - scikit-learn
+  - matplotlib
+  - seaborn
+  - qiskit
+  - qiskit-aer
+  - pip
+  - pip:
+      - scirpy
