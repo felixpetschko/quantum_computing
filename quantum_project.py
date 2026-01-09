@@ -1,4 +1,6 @@
 import math
+import os
+import random
 import re
 from typing import List, Tuple
 
@@ -11,6 +13,11 @@ from qiskit_aer import Aer
 from sklearn.metrics import roc_auc_score, accuracy_score
 from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeClassifier, export_text
+
+SEED = 0
+os.environ["PYTHONHASHSEED"] = str(SEED)
+random.seed(SEED)
+np.random.seed(SEED)
 
 VISUALIZE_TREE = False
 SHOW_CONFUSION_MATRIX = False
@@ -697,8 +704,8 @@ if __name__ == "__main__":
     print("[grover] Circuit qubits:", qc.num_qubits)
 
     backend = Aer.get_backend("aer_simulator")
-    tqc = transpile(qc, backend=backend, optimization_level=1)
-    res = backend.run(tqc, shots=5000).result()
+    tqc = transpile(qc, backend=backend, optimization_level=1, seed_transpiler=SEED)
+    res = backend.run(tqc, shots=5000, seed_simulator=SEED).result()
     counts = res.get_counts()
 
     def key_to_c0_to_c11(key: str) -> str:
