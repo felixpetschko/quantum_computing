@@ -718,15 +718,6 @@ if __name__ == "__main__":
         checks = c[10:12]     # c10..c11 corresponds to q10,q11 checks
         return data10, checks
 
-    top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:15]
-    print("\nTop measured results (showing check bits):")
-    for key, ct in top:
-        data10, checks = split_data_and_checks(key)
-        ok = predicate(data10)
-        chk_ok = (checks == "00")
-        tag = "VALID+CHK" if (ok and chk_ok) else ("VALID" if ok else ("CHK" if chk_ok else ""))
-        print(f"{key}  {ct:4d}  q0..q9={data10}  checks(c10,c11)={checks}  {decode_10bit_to_classes(data10)}  {tag}")
-
     # Raw VALID rate (ignoring checks)
     valid_shots = 0
     for key, ct in counts.items():
@@ -831,6 +822,19 @@ if __name__ == "__main__":
             interaction_energy = category_avg_matrix_abs.loc[sol_cat, core_cat]
             score += interaction_energy
         return score
+
+    top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:15]
+    print("\nTop measured results (showing check bits):")
+    for key, ct in top:
+        data10, checks = split_data_and_checks(key)
+        ok = predicate(data10)
+        chk_ok = (checks == "00")
+        tag = "VALID+CHK" if (ok and chk_ok) else ("VALID" if ok else ("CHK" if chk_ok else ""))
+        bio_score = score_solution(data10, peptide_5_core_categories)
+        print(
+            f"{key}  {ct:4d}  q0..q9={data10}  checks(c10,c11)={checks}  "
+            f"{decode_10bit_to_classes(data10)}  {tag}  BIO={bio_score:.3f}"
+        )
 
     # Apply the scoring function to the sols list
     scored_solutions = []
