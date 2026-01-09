@@ -705,7 +705,9 @@ if __name__ == "__main__":
 
     backend = Aer.get_backend("aer_simulator")
     tqc = transpile(qc, backend=backend, optimization_level=1, seed_transpiler=SEED)
-    res = backend.run(tqc, shots=5000, seed_simulator=SEED).result()
+    
+    num_shots = 5000
+    res = backend.run(tqc, shots=num_shots, seed_simulator=SEED).result()
     counts = res.get_counts()
 
     def key_to_c0_to_c11(key: str) -> str:
@@ -724,7 +726,7 @@ if __name__ == "__main__":
         data10, _ = split_data_and_checks(key)
         if predicate(data10):
             valid_shots += ct
-    print(f"\nVALID shots (raw) = {valid_shots} / 2048  ({valid_shots/2048:.3f})")
+    print(f"\nVALID shots (raw) = {valid_shots} / {num_shots}  ({valid_shots/num_shots:.3f})")
 
     # Postselected VALID rate (keep only checks==00)
     kept_shots = 0
@@ -737,7 +739,7 @@ if __name__ == "__main__":
                 valid_kept_shots += ct
 
     if kept_shots > 0:
-        print(f"Postselected on checks==00: kept = {kept_shots} / 2048  ({kept_shots/2048:.3f})")
+        print(f"Postselected on checks==00: kept = {kept_shots} / {num_shots}  ({kept_shots/num_shots:.3f})")
         print(f"VALID among kept = {valid_kept_shots} / {kept_shots}  ({valid_kept_shots/kept_shots:.3f})")
     else:
         print("Postselected on checks==00: kept = 0 (no shots passed checks)")
@@ -835,18 +837,3 @@ if __name__ == "__main__":
             f"{key}  {ct:4d}  q0..q9={data10}  checks(c10,c11)={checks}  "
             f"{decode_10bit_to_classes(data10)}  {tag}  BIO={bio_score:.3f}"
         )
-
-    # Apply the scoring function to the sols list
-    scored_solutions = []
-    for sol_str in sols:
-        score = score_solution(sol_str, peptide_5_core_categories)
-        scored_solutions.append((sol_str, score))
-
-    # Rank solutions by score in descending order
-    ranked_solutions = sorted(scored_solutions, key=lambda x: x[1], reverse=True)
-
-    # Print each ranked solution
-    print("\nRanked Solutions by BIO score (descending):")
-    for sol_str, score in ranked_solutions:
-        decoded_cats = decode_10bit_to_classes(sol_str)
-        print(f"Solution: {sol_str} -> Decoded: {decoded_cats} -> Score: {score:.3f} BIO")
