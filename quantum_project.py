@@ -158,7 +158,7 @@ y_train, y_test = y[train_mask], y[test_mask]
 # 8) Train interpretable model
 # ------------------------------------------------------------
 clf = DecisionTreeClassifier(
-    max_depth=7,
+    max_depth=20,
     min_samples_leaf=2,
     random_state=0
 )
@@ -400,7 +400,11 @@ def clauses_for_peptide(peptide):
         all_feature_names=list(X.columns),
         plus=plus, minus=minus, hydro=hydro, polar=polar
     )
-    return conditioned_tree_to_dnf_over_tcr(clf, list(X.columns), fixed_pep, positive_class=1)
+    clauses = conditioned_tree_to_dnf_over_tcr(clf, list(X.columns), fixed_pep, positive_class=1)
+    # Enforce handcrafted required literals by AND-ing them into every clause.
+    required = {"tcr_pos0_H": 1, "tcr_pos4_H": 1}
+    clauses = [dict(c, **required) for c in clauses]
+    return clauses
 
 # choose an unseen peptide (string) you want rules for
 unseen_pep = "GLCTLVAML" #"CASSALASGGDTQYF" # example; use your peptide of interest
@@ -456,7 +460,8 @@ def clause_accepts_data10(clause, data10: str) -> bool:
     return all(feats.get(k) == v for k, v in clause.items())
 
 def predicate_from_clauses(data10: str, clauses) -> bool:
-    return any(clause_accepts_data10(c, data10) for c in clauses)
+    expanded = expand_clauses_for_oracle(clauses)
+    return any(clause_accepts_data10(c, data10) for c in expanded)
 
 def clause_to_controls(clause):
     """
@@ -522,6 +527,10 @@ def expand_clauses_for_oracle(clauses, positions=range(5)):
                 base = None
                 break
             if pos_pos[pos]:
+                # Conflicting positives for the same position make the clause unsatisfiable.
+                if len(pos_pos[pos]) > 1:
+                    base = None
+                    break
                 # already fixed by a positive literal
                 cat = next(iter(allowed))
                 base[f"tcr_pos{pos}_{cat}"] = 1
@@ -689,7 +698,7 @@ if __name__ == "__main__":
 
     backend = Aer.get_backend("aer_simulator")
     tqc = transpile(qc, backend=backend, optimization_level=1)
-    res = backend.run(tqc, shots=2048).result()
+    res = backend.run(tqc, shots=5000).result()
     counts = res.get_counts()
 
     def key_to_c0_to_c11(key: str) -> str:
