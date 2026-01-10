@@ -22,19 +22,19 @@ You can run the code with:
 python quantum_project.py --peptide GILVAMTFC
 ```
 
-The --peptide input parameter specifies the peptide for which we want to find a binding CDR3 sequence.
+The `--peptide` input parameter specifies the peptide for which we want to find a binding CDR3 sequence.
 For many inputs you can't find binding sequences. For testing, one could try the following inputs for which we found solutions:
 
-- GILVAMTFC
-- DVWQKSLTM
-- FVGKLMHA
-- GLCTLVAMV
-- KELGHTVAP
-- DEKRHQLMV
-- ATVGLMPHR
-- QWERTYVSL
-- MVACTRLGH
-- KHVLTAGMR
+- `GILVAMTFC`
+- `DVWQKSLTM`
+- `FVGKLMHA`
+- `GLCTLVAMV`
+- `KELGHTVAP`
+- `DEKRHQLMV`
+- `ATVGLMPHR`
+- `QWERTYVSL`
+- `MVACTRLGH`
+- `KHVLTAGMR`
 
 Running the code succesfully should print a list with the best CDR3 candidate sequences in the console, e.g.:
 
