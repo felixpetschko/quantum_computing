@@ -101,6 +101,9 @@ for _, r in df.iterrows():
     w5 = center5(r["cdr3b"])
     if w5 is None:
         continue
+    pep_w5 = center5(r[epitope_col])
+    if pep_w5 is None:
+        continue
 
     # positive
     rows.append({
@@ -108,7 +111,7 @@ for _, r in df.iterrows():
         "epitope": r[epitope_col],
         "label": 1,
         "tcr_feats": featurize_window(w5, "tcr"),
-        "pep_feats": featurize_window(r[epitope_col], "pep")
+        "pep_feats": featurize_window(pep_w5, "pep")
     })
 
     # negatives: mismatched epitopes
@@ -119,12 +122,15 @@ for _, r in df.iterrows():
     )
 
     for e in neg_eps:
+        e_w5 = center5(e)
+        if e_w5 is None:
+            continue
         rows.append({
             "cdr3b": r["cdr3b"],
             "epitope": e,
             "label": 0,
             "tcr_feats": featurize_window(w5, "tcr"),
-            "pep_feats": featurize_window(e, "pep")
+            "pep_feats": featurize_window(e_w5, "pep")
         })
 
 # ------------------------------------------------------------
@@ -402,8 +408,12 @@ def dnf_to_string(clauses, op_and=" & ", op_or=" | ", neg="~"):
     return op_or.join(parts)
 
 def clauses_for_peptide(peptide):
+    peptide_core = center5(peptide)
+    if peptide_core is None:
+        raise ValueError("Peptide must be at least 5 amino acids long.")
+
     fixed_pep = peptide_fixed_assignment(
-        peptide,
+        peptide_core,
         all_feature_names=list(X.columns),
         plus=plus, minus=minus, hydro=hydro, polar=polar
     )
@@ -415,9 +425,12 @@ def clauses_for_peptide(peptide):
 
 # choose an unseen peptide (string) you want rules for
 unseen_pep = "GLCTLVAML" #"CASSALASGGDTQYF" # example; use your peptide of interest
+unseen_pep_core = center5(unseen_pep)
+if unseen_pep_core is None:
+    raise ValueError("Peptide must be at least 5 amino acids long.")
 
 fixed_pep = peptide_fixed_assignment(
-    unseen_pep,
+    unseen_pep_core,
     all_feature_names=list(X.columns),
     plus=plus, minus=minus, hydro=hydro, polar=polar
 )
@@ -467,8 +480,7 @@ def clause_accepts_data10(clause, data10: str) -> bool:
     return all(feats.get(k) == v for k, v in clause.items())
 
 def predicate_from_clauses(data10: str, clauses) -> bool:
-    expanded = expand_clauses_for_oracle(clauses)
-    return any(clause_accepts_data10(c, data10) for c in expanded)
+    return any(clause_accepts_data10(c, data10) for c in clauses)
 
 def clause_to_controls(clause):
     """
@@ -572,11 +584,10 @@ def expand_clauses_for_oracle(clauses, positions=range(5)):
 def phase_oracle_from_clauses(clauses) -> QuantumCircuit:
     """
     Phase-flip states that satisfy ANY clause.
-    Negative literals are expanded into OR over remaining classes.
+    Clauses are expected to have explicit positive assignments per position.
     """
     qc = QuantumCircuit(12, name="Oracle(clauses)")
-    expanded_clauses = expand_clauses_for_oracle(clauses)
-    for clause in expanded_clauses:
+    for clause in clauses:
         controls = clause_to_controls(clause)
         if not controls:
             continue
@@ -692,15 +703,16 @@ if __name__ == "__main__":
     clauses = clauses_for_peptide(peptide)
     print(f"[clauses] Using {len(clauses)} clauses for peptide={peptide}")
 
-    M, sols = brute_force_solutions(clauses, limit_print=8)
+    expanded_clauses = expand_clauses_for_oracle(clauses)
+    M, sols = brute_force_solutions(expanded_clauses, limit_print=8)
     N = 2**10
 
     # Good iteration heuristic
     iters = max(1, int(round((math.pi / 4) * math.sqrt(N / max(1, M)))))
     print(f"[grover] Using iters = {iters} (based on M={M})")
 
-    qc = build_grover_circuit_from_clauses(clauses, iters=iters)
-    predicate = lambda data10: predicate_from_clauses(data10, clauses)
+    qc = build_grover_circuit_from_clauses(expanded_clauses, iters=iters)
+    predicate = lambda data10: predicate_from_clauses(data10, expanded_clauses)
     print("[grover] Circuit qubits:", qc.num_qubits)
 
     backend = Aer.get_backend("aer_simulator")
