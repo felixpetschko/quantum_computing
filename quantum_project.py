@@ -602,7 +602,6 @@ def main():
     y_prob = clf.predict_proba(X_test)[:,1]
 
     print("Unseen-epitope accuracy:", accuracy_score(y_test, y_pred))
-    print("Unseen-epitope AUC:     ", roc_auc_score(y_test, y_prob))
 
     if VISUALIZE_TREE:
         import matplotlib.pyplot as plt
