@@ -232,10 +232,20 @@ def clauses_for_peptide(peptide):
         plus=plus, minus=minus, hydro=hydro, polar=polar
     )
     clauses = conditioned_tree_to_dnf_over_tcr(clf, list(X.columns), fixed_pep, positive_class=1)
-    # Enforce handcrafted required literals by AND-ing them into every clause.
-    required = {"tcr_pos0_H": 1, "tcr_pos4_H": 1}
-    clauses = [dict(c, **required) for c in clauses]
+    clauses = apply_same_anchor_rule(clauses)
+
     return clauses
+
+def apply_same_anchor_rule(clauses):
+    """Expand clauses to enforce pos0 == pos4 across H/P/+/- classes."""
+    same_anchor = []
+    for c in clauses:
+        for cat in ["H", "P", "+", "-"]:
+            same_anchor.append(dict(c, **{
+                f"tcr_pos0_{cat}": 1,
+                f"tcr_pos4_{cat}": 1,
+            }))
+    return same_anchor
 
 ### Quantum utilities
 
@@ -658,7 +668,7 @@ def main():
     )
 
     # Peptide of interest
-    peptide = 'GLCTLVAMV'
+    peptide =  "DVWQKSLTM" #"FVGKLMHAT" # 'GILVAMTFC'
     unseen_pep_core = center5(peptide)
     if unseen_pep_core is None:
         raise ValueError("Peptide must be at least 5 amino acids long.")
@@ -670,6 +680,7 @@ def main():
     )
 
     clauses_tcr = conditioned_tree_to_dnf_over_tcr(clf, list(X.columns), fixed_pep, positive_class=1)
+    clauses_tcr = apply_same_anchor_rule(clauses_tcr)
     formula_tcr_only = dnf_to_string(clauses_tcr)
 
     if SHOW_TREE_TEXT:
