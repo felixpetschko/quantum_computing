@@ -14,7 +14,7 @@ from qiskit.circuit.library import MCXGate
 from qiskit_aer import Aer
 from sklearn.metrics import roc_auc_score, accuracy_score
 from sklearn.model_selection import train_test_split
-from sklearn.tree import DecisionTreeClassifier, export_text
+from sklearn.tree import DecisionTreeClassifier
 
 SEED = 0
 os.environ["PYTHONHASHSEED"] = str(SEED)
@@ -23,6 +23,8 @@ np.random.seed(SEED)
 
 VISUALIZE_TREE = False
 SHOW_CONFUSION_MATRIX = False
+SHOW_TREE_TEXT = False
+MAX_RULES_TO_PRINT = 20
 
 ### Helpers and configuration (used by main)
 
@@ -490,7 +492,7 @@ def main():
     """Run the full training, rule extraction, and quantum search pipeline."""
     global X, y, epitope_ids, clf
 
-    # Step 1: Load VDJdb.
+    #Load VDJdb.
     adata = ir.datasets.vdjdb()
     df = adata.obs.copy()
 
@@ -501,21 +503,21 @@ def main():
     df = df.dropna(subset=["cdr3b", "locus"])
     df = df[df["locus"].str.upper() == "TRB"]
 
-    # Step 2: Detect epitope + MHC columns.
+    #Detect epitope + MHC columns.
     epitope_col = find_col(df.columns, ["epitope"])
     mhc_col = find_col(df.columns, ["mhc"]) or find_col(df.columns, ["hla"])
 
     if epitope_col is None or mhc_col is None:
         raise ValueError("Could not detect epitope or MHC column")
 
-    # Step 3: Restrict to one MHC allele.
+    #Restrict to one MHC allele.
     df = df[df[mhc_col].astype(str).str.contains("HLA-A\\*02:01", na=False)]
     df = df.dropna(subset=[epitope_col])
 
     # Deduplicate TCR-epitope pairs.
     df = df.drop_duplicates(["cdr3b", epitope_col])
 
-    # Step 4: Build positive and mismatch-negative pairs.
+    #Build positive and mismatch-negative pairs.
     rows = []
 
     epitopes = df[epitope_col].unique()
@@ -556,7 +558,7 @@ def main():
                 "pep_feats": featurize_window(e_w5, "pep")
             })
 
-    # Step 5: Build feature matrix.
+    #Build feature matrix.
     X = []
     y = []
     epitope_ids = []
@@ -573,7 +575,7 @@ def main():
     y = np.array(y)
     epitope_ids = np.array(epitope_ids)
 
-    # Step 6: Epitope-held-out split.
+    #Epitope-held-out split.
     unique_eps = np.unique(epitope_ids)
 
     train_eps, test_eps = train_test_split(
@@ -586,7 +588,7 @@ def main():
     X_train, X_test = X[train_mask], X[test_mask]
     y_train, y_test = y[train_mask], y[test_mask]
 
-    # Step 7: Train interpretable model.
+    #Train interpretable model.
     clf = DecisionTreeClassifier(
         max_depth=20,
         min_samples_leaf=2,
@@ -595,15 +597,12 @@ def main():
 
     clf.fit(X_train, y_train)
 
-    # Step 8: Evaluate on unseen epitopes.
+    #Evaluate on unseen epitopes.
     y_pred = clf.predict(X_test)
     y_prob = clf.predict_proba(X_test)[:,1]
 
     print("Unseen-epitope accuracy:", accuracy_score(y_test, y_pred))
     print("Unseen-epitope AUC:     ", roc_auc_score(y_test, y_prob))
-
-    print("\nLearned rules:\n")
-    print(export_text(clf, feature_names=list(X.columns)))
 
     if VISUALIZE_TREE:
         import matplotlib.pyplot as plt
@@ -649,15 +648,17 @@ def main():
     feature_names = list(X.columns)
     rules = extract_tree_rules(clf, feature_names, class_names=["nonbinder","binder"], target_class=1)
 
-    for i, r in enumerate(rules, 1):
-        print(f"\nRule {i} (n={r['n_samples']}, proba={r['proba']}):")
-        for f, op, t in r["conditions"]:
-            print("  ", cond_to_readable(f, op, t))
+    def binder_prob(rule):
+        proba = rule["proba"]
+        return float(proba[1]) if len(proba) > 1 else float(proba[0])
 
-    print("\nDNF:")
-    print(rules_to_dnf(rules)[0:100])
+    sorted_rules = sorted(
+        list(enumerate(rules, 1)),
+        key=lambda ir: (binder_prob(ir[1]), ir[1]["n_samples"]),
+        reverse=True,
+    )
 
-    # Peptide of interest (single source of truth).
+    # Peptide of interest
     peptide = 'GLCTLVAMV'
     unseen_pep_core = center5(peptide)
     if unseen_pep_core is None:
@@ -672,10 +673,26 @@ def main():
     clauses_tcr = conditioned_tree_to_dnf_over_tcr(clf, list(X.columns), fixed_pep, positive_class=1)
     formula_tcr_only = dnf_to_string(clauses_tcr)
 
-    print("Number of positive clauses (for this peptide):", len(clauses_tcr))
-    print(formula_tcr_only[0:100])
+    if SHOW_TREE_TEXT:
+        print("\nRule summary:")
+        print(f"Total binder rules: {len(rules)}")
+        print(f"Showing top {min(MAX_RULES_TO_PRINT, len(rules))} rules by binder prob, then n.")
 
-    # Step 9: Run simulator and compare to brute force.
+        for i, r in sorted_rules[:MAX_RULES_TO_PRINT]:
+            conditions = [cond_to_readable(f, op, t) for f, op, t in r["conditions"]]
+            print(f"\nRule {i}: literals={len(conditions)}, n={r['n_samples']}, p(binder)={binder_prob(r):.3f}")
+            for cond in conditions:
+                print("  ", cond)
+
+    dnf = rules_to_dnf(rules)
+    print(f"\nDNF: clauses={len(rules)}, length={len(dnf)}")
+    print(dnf[:200] + ("..." if len(dnf) > 200 else ""))
+
+    print("\nPeptide-conditioned DNF:")
+    print(f"clauses={len(clauses_tcr)}, length={len(formula_tcr_only)}")
+    print(formula_tcr_only[:200] + ("..." if len(formula_tcr_only) > 200 else ""))
+
+    #Run simulator and compare to brute force.
     clauses = clauses_for_peptide(peptide)
     print(f"[clauses] Using {len(clauses)} clauses for peptide={peptide}")
 
