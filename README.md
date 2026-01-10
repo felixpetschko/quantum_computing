@@ -38,6 +38,7 @@ For many inputs you can't find binding sequences. For testing, one could try the
 
 Running the code succesfully should print a list with the best CDR3 candidate sequences in the console, e.g.:
 
+```text
 Top candidate sequences by bio score:
   DHCCE  BIO=10.370
   DHCCD  BIO=10.290
@@ -49,3 +50,4 @@ Top candidate sequences by bio score:
   DKCCD  BIO=9.920
   ERCCE  BIO=9.800
   ERCCD  BIO=9.720
+```
