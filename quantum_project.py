@@ -26,7 +26,7 @@ SHOW_CONFUSION_MATRIX = False
 SHOW_TREE_TEXT = False
 MAX_RULES_TO_PRINT = 20
 
-### Helpers and configuration (used by main)
+### Helpers and configuration
 
 # --- Column detection helper ---
 def find_col(columns, tokens):
