@@ -657,9 +657,9 @@ def main():
     print("\nDNF:")
     print(rules_to_dnf(rules)[0:100])
 
-    # Example peptide for rule display.
-    unseen_pep = "GLCTLVAML" # example; use your peptide of interest
-    unseen_pep_core = center5(unseen_pep)
+    # Peptide of interest (single source of truth).
+    peptide = 'LLYDANYFL' # "GLCTLVAML"  # replace
+    unseen_pep_core = center5(peptide)
     if unseen_pep_core is None:
         raise ValueError("Peptide must be at least 5 amino acids long.")
 
@@ -676,8 +676,6 @@ def main():
     print(formula_tcr_only[0:100])
 
     # Step 9: Run simulator and compare to brute force.
-    peptide = "GLCTLVAML"  # replace
-
     clauses = clauses_for_peptide(peptide)
     print(f"[clauses] Using {len(clauses)} clauses for peptide={peptide}")
 
@@ -844,7 +842,9 @@ def main():
             f"\nBest valid+checked solution: q0..q9={best_data10}  "
             f"{best_sol_classes}  count={best_count}  BIO={best_bio_score:.3f}"
         )
-
+    else:
+        print("\nNo valid+checked solutions found; skipping candidate expansion.")
+        return
 
     groups = {
     "+": list("KRH"),
