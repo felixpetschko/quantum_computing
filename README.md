@@ -15,7 +15,7 @@ Due to the quantum hardware limitations, we only consider the 5 core positions o
 
 
 ## HowTo
-The necessary libraries can be installed into a conda environment with the according .yml environment file. The code (quantum_project.py) was tested with the Qiskit simulator on the Leo5 HPC cluster.
+The necessary libraries can be installed into a conda environment with the according .yml environment file (e.g. `env_linux.yml`). The code (`quantum_project.py`) was tested with the Qiskit simulator on the Leo5 HPC cluster.
 You can run the code with:
 
 ```bash
