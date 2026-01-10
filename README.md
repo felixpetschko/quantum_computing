@@ -13,4 +13,25 @@ First, we load a database of known T-cell receptor sequences with the according 
 
 Due to the quantum hardware limitations, we only consider the 5 core positions of the sequences. Our assumption is that the binding rules for longer amino acid sequences that can be learned with some machine learning approach or that are given by some biology expert might give us a satisfiability problem that is NP-hard and could take very long to solve. In that case, quantum computing could give quadratic speedup compared to classical hardware. With this project, we showcase a full example pipeline from a database of known binding sequences to a candidate solution of a CDR3 sequence that recognizes an unseen antigen. Finding such binding sequences would solve an important problem in TCR T-cell engineering.
 
+
+## HowTo
 The necessary libraries can be installed into a conda environment with the according .yml environment file. The code (quantum_project.py) was tested with the Qiskit simulator on the Leo5 HPC cluster.
+You can run the code with:
+
+```bash
+python quantum_project.py --peptide GILVAMTFC
+```
+
+The --peptide input parameter specifies the peptide for which we want to find a binding CDR3 sequence.
+For many inputs you can't find binding sequences. For testing, one could try the following inputs for which we found solutions:
+
+- GILVAMTFC
+- DVWQKSLTM
+- FVGKLMHA
+- GLCTLVAMV
+- KELGHTVAP
+- DEKRHQLMV
+- ATVGLMPHR
+- QWERTYVSL
+- MVACTRLGH
+- KHVLTAGMR
