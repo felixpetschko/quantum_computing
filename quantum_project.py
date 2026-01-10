@@ -837,3 +837,60 @@ if __name__ == "__main__":
             f"{key}  {ct:4d}  q0..q9={data10}  checks(c10,c11)={checks}  "
             f"{decode_10bit_to_classes(data10)}  {tag}  BIO={bio_score:.3f}"
         )
+
+    #### select the solution with highest measurement among valid+checked and the highest bio score
+    valid_checked_solutions = []
+    for key, ct in counts.items():
+        data10, checks = split_data_and_checks(key)
+        if predicate(data10) and checks == "00":
+            bio_score = score_solution(data10, peptide_5_core_categories)
+            valid_checked_solutions.append((data10, ct, bio_score))
+    if valid_checked_solutions:
+        best_solution = max(valid_checked_solutions, key=lambda x: (x[1], x[2]))
+        best_data10, best_count, best_bio_score = best_solution
+        best_sol_classes = decode_10bit_to_classes(best_data10)
+        print(
+            f"\nBest valid+checked solution: q0..q9={best_data10}  "
+            f"{best_sol_classes}  count={best_count}  BIO={best_bio_score:.3f}"
+        )
+
+
+    groups = {
+    "+": list("KRH"),
+    "-": list("DE"),
+    "H": list("AVILMFWY"),
+    "P": list("STNQGPC")}
+
+    from itertools import product
+
+    def expand_groups(group_string):
+        """
+        group_string: e.g. 'HHHP+'
+        returns all amino acid strings consistent with it
+        """
+        choices = [groups[g] for g in group_string]
+        for combo in product(*choices):
+            yield "".join(combo)
+    candidates = list(expand_groups(best_sol_classes))
+    print(f"\nTotal candidate sequences from best solution: {len(candidates)}")
+
+    #compute the score as in bio score but with actual amino acids table comparing the canditates with peptide_5_core
+    aa_validation_abs = np.abs(aa_validation_1_letter)
+    def score_candidate(candidate: str, peptide_core: str) -> float:
+        score = 0.0
+        for i in range(5):
+            aa_sol = candidate[i]
+            aa_core = peptide_core[i]
+            interaction_energy = aa_validation_abs.loc[aa_sol, aa_core]
+            score += interaction_energy
+        return score
+    scored_candidates = []
+    for cand in candidates:
+        bio_score = score_candidate(cand, peptide_5_core)
+        scored_candidates.append((cand, bio_score))
+    scored_candidates = sorted(scored_candidates, key=lambda x: x[1], reverse=True)
+    print("\nTop candidate sequences by bio score:")
+    for cand, bio_score in scored_candidates[:10]:
+        print(f"  {cand}  BIO={bio_score:.3f}")
+  
+    
