@@ -658,7 +658,7 @@ def main():
     print(rules_to_dnf(rules)[0:100])
 
     # Peptide of interest (single source of truth).
-    peptide = 'LLYDANYFL' # "GLCTLVAML"  # replace
+    peptide = 'GLCTLVAMV'
     unseen_pep_core = center5(peptide)
     if unseen_pep_core is None:
         raise ValueError("Peptide must be at least 5 amino acids long.")
