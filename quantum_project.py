@@ -25,19 +25,6 @@ SHOW_CONFUSION_MATRIX = False
 ### Create decision tree
 
 # ------------------------------------------------------------
-# 1) Load VDJdb
-# ------------------------------------------------------------
-adata = ir.datasets.vdjdb()
-df = adata.obs.copy()
-
-cdr3b = ir.get.airr(adata, "junction_aa", chain="VDJ_1")
-locus = ir.get.airr(adata, "locus", chain="VDJ_1")
-
-df = df.join(cdr3b.rename("cdr3b")).join(locus.rename("locus"))
-df = df.dropna(subset=["cdr3b", "locus"])
-df = df[df["locus"].str.upper() == "TRB"]
-
-# ------------------------------------------------------------
 # 2) Detect epitope + MHC columns
 # ------------------------------------------------------------
 def find_col(columns, tokens):
@@ -46,21 +33,6 @@ def find_col(columns, tokens):
         if all(t in low for t in tokens):
             return c
     return None
-
-epitope_col = find_col(df.columns, ["epitope"])
-mhc_col = find_col(df.columns, ["mhc"]) or find_col(df.columns, ["hla"])
-
-if epitope_col is None or mhc_col is None:
-    raise ValueError("Could not detect epitope or MHC column")
-
-# ------------------------------------------------------------
-# 3) Restrict to one MHC allele (important!)
-# ------------------------------------------------------------
-df = df[df[mhc_col].astype(str).str.contains("HLA-A\\*02:01", na=False)]
-df = df.dropna(subset=[epitope_col])
-
-# Deduplicate TCR–epitope pairs
-df = df.drop_duplicates(["cdr3b", epitope_col])
 
 # ------------------------------------------------------------
 # 4) Define feature encoders
@@ -89,148 +61,6 @@ def featurize_window(w, prefix):
         for cat in ["H", "P", "+", "-"]:
             feats[f"{prefix}_pos{i}_{cat}"] = int(g == cat)
     return feats
-
-# ------------------------------------------------------------
-# 5) Build positive and mismatch-negative pairs
-# ------------------------------------------------------------
-rows = []
-
-epitopes = df[epitope_col].unique()
-
-for _, r in df.iterrows():
-    w5 = center5(r["cdr3b"])
-    if w5 is None:
-        continue
-    pep_w5 = center5(r[epitope_col])
-    if pep_w5 is None:
-        continue
-
-    # positive
-    rows.append({
-        "cdr3b": r["cdr3b"],
-        "epitope": r[epitope_col],
-        "label": 1,
-        "tcr_feats": featurize_window(w5, "tcr"),
-        "pep_feats": featurize_window(pep_w5, "pep")
-    })
-
-    # negatives: mismatched epitopes
-    neg_eps = np.random.choice(
-        epitopes[epitopes != r[epitope_col]],
-        size=min(3, len(epitopes)-1),
-        replace=False
-    )
-
-    for e in neg_eps:
-        e_w5 = center5(e)
-        if e_w5 is None:
-            continue
-        rows.append({
-            "cdr3b": r["cdr3b"],
-            "epitope": e,
-            "label": 0,
-            "tcr_feats": featurize_window(w5, "tcr"),
-            "pep_feats": featurize_window(e_w5, "pep")
-        })
-
-# ------------------------------------------------------------
-# 6) Build feature matrix
-# ------------------------------------------------------------
-X = []
-y = []
-epitope_ids = []
-
-for r in rows:
-    feats = {}
-    feats.update(r["tcr_feats"])
-    feats.update(r["pep_feats"])
-    X.append(feats)
-    y.append(r["label"])
-    epitope_ids.append(r["epitope"])
-
-X = pd.DataFrame(X).fillna(0).astype(int)
-y = np.array(y)
-epitope_ids = np.array(epitope_ids)
-
-# ------------------------------------------------------------
-# 7) Epitope-held-out split (CRITICAL)
-# ------------------------------------------------------------
-unique_eps = np.unique(epitope_ids)
-
-train_eps, test_eps = train_test_split(
-    unique_eps, test_size=0.2, random_state=0
-)
-
-train_mask = np.isin(epitope_ids, train_eps)
-test_mask  = np.isin(epitope_ids, test_eps)
-
-X_train, X_test = X[train_mask], X[test_mask]
-y_train, y_test = y[train_mask], y[test_mask]
-
-# ------------------------------------------------------------
-# 8) Train interpretable model
-# ------------------------------------------------------------
-clf = DecisionTreeClassifier(
-    max_depth=20,
-    min_samples_leaf=2,
-    random_state=0
-)
-
-clf.fit(X_train, y_train)
-
-# ------------------------------------------------------------
-# 9) Evaluate on unseen epitopes
-# ------------------------------------------------------------
-y_pred = clf.predict(X_test)
-y_prob = clf.predict_proba(X_test)[:,1]
-
-print("Unseen-epitope accuracy:", accuracy_score(y_test, y_pred))
-print("Unseen-epitope AUC:     ", roc_auc_score(y_test, y_prob))
-
-print("\nLearned rules:\n")
-print(export_text(clf, feature_names=list(X.columns)))
-
-if VISUALIZE_TREE:
-    import matplotlib.pyplot as plt
-    from sklearn.tree import plot_tree
-
-    plt.figure(figsize=(50, 20))  # Taller layout for readability
-    plot_tree(
-        clf,
-        feature_names=X.columns,
-        class_names=["nonbinder", "binder"],
-        filled=True,
-        rounded=True,
-        proportion=True,
-        fontsize=20,
-    )
-    plt.title("Decision Tree Classifier for CDR3 Binding (Vertical Layout)", fontsize=16)
-    plt.savefig("decision_tree.png", dpi=300, bbox_inches="tight")
-    plt.show()
-
-if SHOW_CONFUSION_MATRIX:
-    from sklearn.metrics import confusion_matrix
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-
-    cm = confusion_matrix(y_test, y_pred, labels=clf.classes_)
-    fig, ax = plt.subplots(figsize=(8, 6))
-    sns.heatmap(
-        cm,
-        annot=True,
-        fmt="d",
-        cmap="Blues",
-        cbar=False,
-        xticklabels=["nonbinder", "binder"],
-        yticklabels=["nonbinder", "binder"],
-        ax=ax,
-    )
-    plt.xlabel("Predicted Label")
-    plt.ylabel("True Label")
-    plt.title("Confusion Matrix")
-    plt.savefig("confusion_matrix.png", dpi=300, bbox_inches="tight")
-    plt.show()
-
 
 def cond_to_readable(feature, op, threshold):
     # expects feature like "tcr_pos3_H" or "pep_pos1_+"
@@ -306,18 +136,6 @@ def extract_tree_rules(clf, feature_names, class_names=None, target_class=1):
 
     recurse(0, [])
     return rules
-
-feature_names = list(X.columns)
-rules = extract_tree_rules(clf, feature_names, class_names=["nonbinder","binder"], target_class=1)
-
-for i, r in enumerate(rules, 1):
-    print(f"\nRule {i} (n={r['n_samples']}, proba={r['proba']}):")
-    for f, op, t in r["conditions"]:
-        print("  ", cond_to_readable(f, op, t))
-
-print("\nDNF:")
-print(rules_to_dnf(rules)[0:100])
-
 
 def peptide_fixed_assignment(peptide, all_feature_names, plus, minus, hydro, polar):
     def aa2grp(a):
@@ -422,25 +240,6 @@ def clauses_for_peptide(peptide):
     required = {"tcr_pos0_H": 1, "tcr_pos4_H": 1}
     clauses = [dict(c, **required) for c in clauses]
     return clauses
-
-# choose an unseen peptide (string) you want rules for
-unseen_pep = "GLCTLVAML" #"CASSALASGGDTQYF" # example; use your peptide of interest
-unseen_pep_core = center5(unseen_pep)
-if unseen_pep_core is None:
-    raise ValueError("Peptide must be at least 5 amino acids long.")
-
-fixed_pep = peptide_fixed_assignment(
-    unseen_pep_core,
-    all_feature_names=list(X.columns),
-    plus=plus, minus=minus, hydro=hydro, polar=polar
-)
-
-clauses_tcr = conditioned_tree_to_dnf_over_tcr(clf, list(X.columns), fixed_pep, positive_class=1)
-formula_tcr_only = dnf_to_string(clauses_tcr)
-
-print("Number of positive clauses (for this peptide):", len(clauses_tcr))
-print(formula_tcr_only[0:100])
-
 
 ###quantum
 
@@ -694,10 +493,213 @@ def build_grover_circuit_from_clauses(clauses, iters: int) -> QuantumCircuit:
     return qc
 
 
-# -------------------------
-# Run (simulator) + compare to brute force
-# -------------------------
-if __name__ == "__main__":
+def main():
+    global X, y, epitope_ids, clf
+
+    # ------------------------------------------------------------
+    # 1) Load VDJdb
+    # ------------------------------------------------------------
+    adata = ir.datasets.vdjdb()
+    df = adata.obs.copy()
+
+    cdr3b = ir.get.airr(adata, "junction_aa", chain="VDJ_1")
+    locus = ir.get.airr(adata, "locus", chain="VDJ_1")
+
+    df = df.join(cdr3b.rename("cdr3b")).join(locus.rename("locus"))
+    df = df.dropna(subset=["cdr3b", "locus"])
+    df = df[df["locus"].str.upper() == "TRB"]
+
+    # ------------------------------------------------------------
+    # 2) Detect epitope + MHC columns
+    # ------------------------------------------------------------
+    epitope_col = find_col(df.columns, ["epitope"])
+    mhc_col = find_col(df.columns, ["mhc"]) or find_col(df.columns, ["hla"])
+
+    if epitope_col is None or mhc_col is None:
+        raise ValueError("Could not detect epitope or MHC column")
+
+    # ------------------------------------------------------------
+    # 3) Restrict to one MHC allele (important!)
+    # ------------------------------------------------------------
+    df = df[df[mhc_col].astype(str).str.contains("HLA-A\\*02:01", na=False)]
+    df = df.dropna(subset=[epitope_col])
+
+    # Deduplicate TCR–epitope pairs
+    df = df.drop_duplicates(["cdr3b", epitope_col])
+
+    # ------------------------------------------------------------
+    # 5) Build positive and mismatch-negative pairs
+    # ------------------------------------------------------------
+    rows = []
+
+    epitopes = df[epitope_col].unique()
+
+    for _, r in df.iterrows():
+        w5 = center5(r["cdr3b"])
+        if w5 is None:
+            continue
+        pep_w5 = center5(r[epitope_col])
+        if pep_w5 is None:
+            continue
+
+        # positive
+        rows.append({
+            "cdr3b": r["cdr3b"],
+            "epitope": r[epitope_col],
+            "label": 1,
+            "tcr_feats": featurize_window(w5, "tcr"),
+            "pep_feats": featurize_window(pep_w5, "pep")
+        })
+
+        # negatives: mismatched epitopes
+        neg_eps = np.random.choice(
+            epitopes[epitopes != r[epitope_col]],
+            size=min(3, len(epitopes)-1),
+            replace=False
+        )
+
+        for e in neg_eps:
+            e_w5 = center5(e)
+            if e_w5 is None:
+                continue
+            rows.append({
+                "cdr3b": r["cdr3b"],
+                "epitope": e,
+                "label": 0,
+                "tcr_feats": featurize_window(w5, "tcr"),
+                "pep_feats": featurize_window(e_w5, "pep")
+            })
+
+    # ------------------------------------------------------------
+    # 6) Build feature matrix
+    # ------------------------------------------------------------
+    X = []
+    y = []
+    epitope_ids = []
+
+    for r in rows:
+        feats = {}
+        feats.update(r["tcr_feats"])
+        feats.update(r["pep_feats"])
+        X.append(feats)
+        y.append(r["label"])
+        epitope_ids.append(r["epitope"])
+
+    X = pd.DataFrame(X).fillna(0).astype(int)
+    y = np.array(y)
+    epitope_ids = np.array(epitope_ids)
+
+    # ------------------------------------------------------------
+    # 7) Epitope-held-out split (CRITICAL)
+    # ------------------------------------------------------------
+    unique_eps = np.unique(epitope_ids)
+
+    train_eps, test_eps = train_test_split(
+        unique_eps, test_size=0.2, random_state=0
+    )
+
+    train_mask = np.isin(epitope_ids, train_eps)
+    test_mask  = np.isin(epitope_ids, test_eps)
+
+    X_train, X_test = X[train_mask], X[test_mask]
+    y_train, y_test = y[train_mask], y[test_mask]
+
+    # ------------------------------------------------------------
+    # 8) Train interpretable model
+    # ------------------------------------------------------------
+    clf = DecisionTreeClassifier(
+        max_depth=20,
+        min_samples_leaf=2,
+        random_state=0
+    )
+
+    clf.fit(X_train, y_train)
+
+    # ------------------------------------------------------------
+    # 9) Evaluate on unseen epitopes
+    # ------------------------------------------------------------
+    y_pred = clf.predict(X_test)
+    y_prob = clf.predict_proba(X_test)[:,1]
+
+    print("Unseen-epitope accuracy:", accuracy_score(y_test, y_pred))
+    print("Unseen-epitope AUC:     ", roc_auc_score(y_test, y_prob))
+
+    print("\nLearned rules:\n")
+    print(export_text(clf, feature_names=list(X.columns)))
+
+    if VISUALIZE_TREE:
+        import matplotlib.pyplot as plt
+        from sklearn.tree import plot_tree
+
+        plt.figure(figsize=(50, 20))  # Taller layout for readability
+        plot_tree(
+            clf,
+            feature_names=X.columns,
+            class_names=["nonbinder", "binder"],
+            filled=True,
+            rounded=True,
+            proportion=True,
+            fontsize=20,
+        )
+        plt.title("Decision Tree Classifier for CDR3 Binding (Vertical Layout)", fontsize=16)
+        plt.savefig("decision_tree.png", dpi=300, bbox_inches="tight")
+        plt.show()
+
+    if SHOW_CONFUSION_MATRIX:
+        from sklearn.metrics import confusion_matrix
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+
+        cm = confusion_matrix(y_test, y_pred, labels=clf.classes_)
+        fig, ax = plt.subplots(figsize=(8, 6))
+        sns.heatmap(
+            cm,
+            annot=True,
+            fmt="d",
+            cmap="Blues",
+            cbar=False,
+            xticklabels=["nonbinder", "binder"],
+            yticklabels=["nonbinder", "binder"],
+            ax=ax,
+        )
+        plt.xlabel("Predicted Label")
+        plt.ylabel("True Label")
+        plt.title("Confusion Matrix")
+        plt.savefig("confusion_matrix.png", dpi=300, bbox_inches="tight")
+        plt.show()
+
+    feature_names = list(X.columns)
+    rules = extract_tree_rules(clf, feature_names, class_names=["nonbinder","binder"], target_class=1)
+
+    for i, r in enumerate(rules, 1):
+        print(f"\nRule {i} (n={r['n_samples']}, proba={r['proba']}):")
+        for f, op, t in r["conditions"]:
+            print("  ", cond_to_readable(f, op, t))
+
+    print("\nDNF:")
+    print(rules_to_dnf(rules)[0:100])
+
+    # choose an unseen peptide (string) you want rules for
+    unseen_pep = "GLCTLVAML" #"CASSALASGGDTQYF" # example; use your peptide of interest
+    unseen_pep_core = center5(unseen_pep)
+    if unseen_pep_core is None:
+        raise ValueError("Peptide must be at least 5 amino acids long.")
+
+    fixed_pep = peptide_fixed_assignment(
+        unseen_pep_core,
+        all_feature_names=list(X.columns),
+        plus=plus, minus=minus, hydro=hydro, polar=polar
+    )
+
+    clauses_tcr = conditioned_tree_to_dnf_over_tcr(clf, list(X.columns), fixed_pep, positive_class=1)
+    formula_tcr_only = dnf_to_string(clauses_tcr)
+
+    print("Number of positive clauses (for this peptide):", len(clauses_tcr))
+    print(formula_tcr_only[0:100])
+
+    # -------------------------
+    # Run (simulator) + compare to brute force
+    # -------------------------
     peptide = "GLCTLVAML"  # replace
 
     clauses = clauses_for_peptide(peptide)
@@ -904,5 +906,9 @@ if __name__ == "__main__":
     print("\nTop candidate sequences by bio score:")
     for cand, bio_score in scored_candidates[:10]:
         print(f"  {cand}  BIO={bio_score:.3f}")
+
+
+if __name__ == "__main__":
+    main()
   
     
