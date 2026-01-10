@@ -1,5 +1,6 @@
 """End-to-end pipeline: train interpretable TCR/epitope rules and run Grover search."""
 
+import argparse
 import math
 import os
 import random
@@ -25,6 +26,7 @@ VISUALIZE_TREE = False
 SHOW_CONFUSION_MATRIX = False
 SHOW_TREE_TEXT = False
 MAX_RULES_TO_PRINT = 20
+DEFAULT_PEPTIDE = "DVWQKSLTM"
 
 ### Helpers and configuration
 
@@ -498,7 +500,7 @@ def build_grover_circuit_from_clauses(clauses, iters: int) -> QuantumCircuit:
     return qc
 
 
-def main():
+def main(peptide=None):
     """Run the full training, rule extraction, and quantum search pipeline."""
     global X, y, epitope_ids, clf
 
@@ -668,7 +670,8 @@ def main():
     )
 
     # Peptide of interest
-    peptide =  "DVWQKSLTM" #"FVGKLMHAT" # 'GILVAMTFC'
+    if peptide is None:
+        peptide = DEFAULT_PEPTIDE
     unseen_pep_core = center5(peptide)
     if unseen_pep_core is None:
         raise ValueError("Peptide must be at least 5 amino acids long.")
@@ -911,6 +914,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Run TCR/epitope rule extraction and Grover search.")
+    parser.add_argument("--peptide", default=DEFAULT_PEPTIDE, help="Peptide sequence to analyze.")
+    args = parser.parse_args()
+    main(peptide=args.peptide)
   
     
