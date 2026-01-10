@@ -1,3 +1,5 @@
+"""End-to-end pipeline: train interpretable TCR/epitope rules and run Grover search."""
+
 import math
 import os
 import random
@@ -24,37 +26,37 @@ SHOW_CONFUSION_MATRIX = False
 
 ### Helpers and configuration (used by main)
 
-# ------------------------------------------------------------
-# Column detection helper
-# ------------------------------------------------------------
+# --- Column detection helper ---
 def find_col(columns, tokens):
+    """Return the first column name containing all tokens (case-insensitive)."""
     for c in columns:
         low = c.lower()
         if all(t in low for t in tokens):
             return c
     return None
 
-# ------------------------------------------------------------
-# Feature encoding helpers
-# ------------------------------------------------------------
+# --- Feature encoding helpers ---
 plus  = set("KRH")
 minus = set("DE")
 hydro = set("AVILMFWY")
 polar = set("STNQGPC")
 
 def aa2grp(a):
+    """Map an amino acid to a coarse physicochemical group."""
     if a in plus:  return "+"
     if a in minus: return "-"
     if a in hydro: return "H"
     return "P"
 
 def center5(seq):
+    """Return the central 5-mer of a sequence, or None if too short."""
     if len(seq) < 5:
         return None
     mid = len(seq) // 2
     return seq[mid-2:mid+3]
 
 def featurize_window(w, prefix):
+    """One-hot encode a window of amino-acid groups with a prefix."""
     feats = {}
     for i, a in enumerate(w):
         g = aa2grp(a)
@@ -63,7 +65,7 @@ def featurize_window(w, prefix):
     return feats
 
 def cond_to_readable(feature, op, threshold):
-    # expects feature like "tcr_pos3_H" or "pep_pos1_+"
+    """Format a tree split into a readable condition string."""
     m = re.match(r"(tcr|pep)_pos(\d+)_(H|P|\+|-)$", feature)
     if m and abs(threshold - 0.5) < 1e-6:
         prefix = m.group(1)
@@ -77,6 +79,7 @@ def cond_to_readable(feature, op, threshold):
     return f"({feature} {op} {threshold:g})"
 
 def rules_to_dnf(rules):
+    """Convert a list of rule dicts into a DNF string for display."""
     clauses = []
     for r in rules:
         clause = " and ".join(cond_to_readable(f,op,t) for f,op,t in r["conditions"])
@@ -84,19 +87,7 @@ def rules_to_dnf(rules):
     return " or ".join(clauses) if clauses else "False"
 
 def extract_tree_rules(clf, feature_names, class_names=None, target_class=1):
-    """
-    Extract root->leaf rules from a fitted sklearn DecisionTreeClassifier.
-
-    Returns a list of dicts:
-      {
-        "class": predicted_class,
-        "class_name": ...,
-        "conditions": [(feature, op, threshold), ...],
-        "n_samples": int,
-        "value": class_counts (array),
-        "proba": class_probabilities (array)
-      }
-    """
+    """Extract root-to-leaf rules for a target class from a decision tree."""
     tree = clf.tree_
     feat = tree.feature
     thr = tree.threshold
@@ -108,6 +99,7 @@ def extract_tree_rules(clf, feature_names, class_names=None, target_class=1):
     rules = []
 
     def recurse(node, path):
+        """Depth-first traversal to collect rules from root to leaves."""
         is_leaf = (children_left[node] == children_right[node])
         if is_leaf:
             counts = value[node][0]
@@ -138,16 +130,18 @@ def extract_tree_rules(clf, feature_names, class_names=None, target_class=1):
     return rules
 
 def peptide_fixed_assignment(peptide, all_feature_names, plus, minus, hydro, polar):
+    """Build a fixed peptide feature assignment for conditioning the tree."""
     def aa2grp(a):
+        """Local aa-to-group mapping for peptide encoding."""
         if a in plus:  return "+"
         if a in minus: return "-"
         if a in hydro: return "H"
         return "P"
 
-    # Start with all pep_* features set to 0
+    # Start with all pep_* features set to 0.
     fixed = {fn: 0 for fn in all_feature_names if fn.startswith("pep_")}
 
-    # Set the 1s for positions that exist in this peptide
+    # Set the 1s for positions that exist in this peptide.
     for i, a in enumerate(peptide):
         g = aa2grp(a)
         for cat in ["H", "P", "+", "-"]:
@@ -159,12 +153,7 @@ def peptide_fixed_assignment(peptide, all_feature_names, plus, minus, hydro, pol
 
 
 def conditioned_tree_to_dnf_over_tcr(clf, feature_names, fixed_pep, positive_class=1):
-    """
-    Returns DNF clauses over NON-fixed features (i.e. tcr_*),
-    by following peptide splits deterministically.
-    Each clause: dict {feature_name: 0/1}
-    Whole formula: OR over clauses.
-    """
+    """Return DNF clauses over tcr_* features by conditioning on a peptide."""
     tree = clf.tree_
     feat = tree.feature
     thr = tree.threshold
@@ -175,12 +164,15 @@ def conditioned_tree_to_dnf_over_tcr(clf, feature_names, fixed_pep, positive_cla
     clauses = []
 
     def is_leaf(n):
+        """Return True if the node is a leaf."""
         return left[n] == right[n] == -1
 
     def leaf_class(n):
+        """Return the predicted class index at a leaf node."""
         return int(np.argmax(value[n][0]))
 
     def go(n, constraints):
+        """Recurse through the tree while collecting clause literals."""
         if is_leaf(n):
             if leaf_class(n) == positive_class:
                 clause = {}
@@ -198,25 +190,26 @@ def conditioned_tree_to_dnf_over_tcr(clf, feature_names, fixed_pep, positive_cla
         name = feature_names[fidx]
         t = thr[n]
 
-        # (Your features are 0/1, so thresholds are basically 0.5)
+        # Features are 0/1, so thresholds are effectively 0.5.
         if name in fixed_pep:
             v = fixed_pep[name]
-            # left: x <= t  (v==0 for t=0.5), right: x > t (v==1)
+            # left: x <= t (v==0 for t=0.5), right: x > t (v==1)
             if v <= t:
                 go(left[n], constraints)
             else:
                 go(right[n], constraints)
         else:
-            # keep this split as a boolean literal in the clause
+            # Keep this split as a boolean literal in the clause.
             go(left[n],  constraints + [(name, 0)])
             go(right[n], constraints + [(name, 1)])
 
     go(0, [])
-    # Optionally: filter to only tcr_ literals (should already be, if fixed_pep covers all pep_)
+    # Filter to only tcr_ literals (pep_ literals are fixed by conditioning).
     clauses = [{k:v for k,v in c.items() if k.startswith("tcr_")} for c in clauses]
     return clauses
 
 def dnf_to_string(clauses, op_and=" & ", op_or=" | ", neg="~"):
+    """Format clause dicts as a DNF string with customizable operators."""
     if not clauses:
         return "FALSE"
     parts = []
@@ -226,6 +219,7 @@ def dnf_to_string(clauses, op_and=" & ", op_or=" | ", neg="~"):
     return op_or.join(parts)
 
 def clauses_for_peptide(peptide):
+    """Generate TCR-only clauses for a given peptide with handcrafted filters."""
     peptide_core = center5(peptide)
     if peptide_core is None:
         raise ValueError("Peptide must be at least 5 amino acids long.")
@@ -241,11 +235,9 @@ def clauses_for_peptide(peptide):
     clauses = [dict(c, **required) for c in clauses]
     return clauses
 
-###quantum
+### Quantum utilities
 
-# -------------------------
-# 2-bit class encoding per position
-# -------------------------
+# --- 2-bit class encoding per position ---
 # 00 -> H (hydrophobic)
 # 01 -> P (polar)
 # 10 -> + (positively charged)
@@ -264,13 +256,14 @@ CLASS_TO_BITS = {v: k for k, v in BITS_TO_CLASS.items()}
 # q10 = check ancilla #1 (parity check)
 # q11 = check ancilla #2 (parity check)
 #
-# NOTE: We no longer use a phase ancilla |->. The oracle is implemented as an MCZ
-# on the data qubits (via H–MCX–H), freeing q11 for checking.
+# NOTE: The oracle is an MCZ on data qubits (via H–MCX–H); no phase ancilla.
 
 def decode_10bit_to_classes(data10_q0_to_q9: str) -> List[str]:
+    """Decode a 10-bit string into five class symbols (H/P/+/-)."""
     return [BITS_TO_CLASS[data10_q0_to_q9[i:i+2]] for i in range(0, 10, 2)]
 
 def clause_accepts_data10(clause, data10: str) -> bool:
+    """Return True if a 10-bit assignment satisfies a clause dict."""
     classes = decode_10bit_to_classes(data10)
     feats = {}
     for pos, cls in enumerate(classes):
@@ -279,12 +272,15 @@ def clause_accepts_data10(clause, data10: str) -> bool:
     return all(feats.get(k) == v for k, v in clause.items())
 
 def predicate_from_clauses(data10: str, clauses) -> bool:
+    """Return True if any clause matches the 10-bit assignment."""
     return any(clause_accepts_data10(c, data10) for c in clauses)
 
 def clause_to_controls(clause):
     """
     Convert a clause dict into exact bit controls for q0..q9.
-    Ambiguous constraints (only negatives) are ignored for now.
+
+    Returns a list of (qubit_index, bit_value) controls or None if
+    the clause has conflicting positive literals.
     """
     pos_to_class = {}
     for feat, val in clause.items():
@@ -309,8 +305,9 @@ def clause_to_controls(clause):
 
 def expand_clauses_for_oracle(clauses, positions=range(5)):
     """
-    Expand negative literals into OR over remaining classes, producing
-    clauses with explicit positive class assignments for those positions.
+    Expand negative literals into OR over remaining classes.
+
+    Returns clauses with explicit positive class assignments for each position.
     """
     expanded = []
     all_cats = ["H", "P", "+", "-"]
@@ -411,10 +408,9 @@ def phase_oracle_from_clauses(clauses) -> QuantumCircuit:
             qc.x(q)
     return qc
 
-# -------------------------
-# Predicate (classical)
-# -------------------------
+# --- Predicate helpers ---
 def brute_force_solutions(clauses, limit_print: int = 12) -> Tuple[int, List[str]]:
+    """Exhaustively count satisfying 10-bit assignments for sanity checks."""
     sols = []
     for x in range(2**10):
         s = format(x, "010b")  # q0..q9 order
@@ -428,10 +424,9 @@ def brute_force_solutions(clauses, limit_print: int = 12) -> Tuple[int, List[str
         print(f"... (showing first {limit_print} of {len(sols)})")
     return len(sols), sols
 
-# -------------------------
-# Grover diffuser on data register only (q0..q9)
-# -------------------------
+# --- Grover components ---
 def diffuser_on_data_10() -> QuantumCircuit:
+    """Return a Grover diffuser acting only on q0..q9."""
     qc = QuantumCircuit(12, name="Diffuser(data10)")
     data = list(range(10))
 
@@ -448,14 +443,13 @@ def diffuser_on_data_10() -> QuantumCircuit:
     qc.h(data)
     return qc
 
-# -------------------------
-# Add lightweight error-detection checks (2 parities) using q10,q11
-# -------------------------
+# --- Error-detection checks (ancillas) ---
 def add_anchor_parity_checks(qc: QuantumCircuit, check1: int = 10, check2: int = 11):
     """
-    Compute two simple parity checks that SHOULD be 0 for valid states:
-      check1 = a0 XOR a4  (q0 XOR q8)
-      check2 = b0 XOR b4  (q1 XOR q9)
+    Compute two simple parity checks that should be 0 for valid states.
+
+    check1 = a0 XOR a4  (q0 XOR q8)
+    check2 = b0 XOR b4  (q1 XOR q9)
 
     Measure these ancillas and postselect on 00.
     """
@@ -470,10 +464,9 @@ def add_anchor_parity_checks(qc: QuantumCircuit, check1: int = 10, check2: int =
     qc.cx(1, check2)
     qc.cx(9, check2)
 
-# -------------------------
-# Build Grover circuit
-# -------------------------
+# --- Grover circuit builder ---
 def build_grover_circuit_from_clauses(clauses, iters: int) -> QuantumCircuit:
+    """Construct a Grover circuit with a clause-based phase oracle."""
     oracle = phase_oracle_from_clauses(clauses)
     diff = diffuser_on_data_10()
 
@@ -494,11 +487,10 @@ def build_grover_circuit_from_clauses(clauses, iters: int) -> QuantumCircuit:
 
 
 def main():
+    """Run the full training, rule extraction, and quantum search pipeline."""
     global X, y, epitope_ids, clf
 
-    # ------------------------------------------------------------
-    # 1) Load VDJdb
-    # ------------------------------------------------------------
+    # Step 1: Load VDJdb.
     adata = ir.datasets.vdjdb()
     df = adata.obs.copy()
 
@@ -509,27 +501,21 @@ def main():
     df = df.dropna(subset=["cdr3b", "locus"])
     df = df[df["locus"].str.upper() == "TRB"]
 
-    # ------------------------------------------------------------
-    # 2) Detect epitope + MHC columns
-    # ------------------------------------------------------------
+    # Step 2: Detect epitope + MHC columns.
     epitope_col = find_col(df.columns, ["epitope"])
     mhc_col = find_col(df.columns, ["mhc"]) or find_col(df.columns, ["hla"])
 
     if epitope_col is None or mhc_col is None:
         raise ValueError("Could not detect epitope or MHC column")
 
-    # ------------------------------------------------------------
-    # 3) Restrict to one MHC allele (important!)
-    # ------------------------------------------------------------
+    # Step 3: Restrict to one MHC allele.
     df = df[df[mhc_col].astype(str).str.contains("HLA-A\\*02:01", na=False)]
     df = df.dropna(subset=[epitope_col])
 
-    # Deduplicate TCR–epitope pairs
+    # Deduplicate TCR-epitope pairs.
     df = df.drop_duplicates(["cdr3b", epitope_col])
 
-    # ------------------------------------------------------------
-    # 5) Build positive and mismatch-negative pairs
-    # ------------------------------------------------------------
+    # Step 4: Build positive and mismatch-negative pairs.
     rows = []
 
     epitopes = df[epitope_col].unique()
@@ -542,7 +528,7 @@ def main():
         if pep_w5 is None:
             continue
 
-        # positive
+        # Positive example.
         rows.append({
             "cdr3b": r["cdr3b"],
             "epitope": r[epitope_col],
@@ -551,7 +537,7 @@ def main():
             "pep_feats": featurize_window(pep_w5, "pep")
         })
 
-        # negatives: mismatched epitopes
+        # Negative examples: mismatched epitopes.
         neg_eps = np.random.choice(
             epitopes[epitopes != r[epitope_col]],
             size=min(3, len(epitopes)-1),
@@ -570,9 +556,7 @@ def main():
                 "pep_feats": featurize_window(e_w5, "pep")
             })
 
-    # ------------------------------------------------------------
-    # 6) Build feature matrix
-    # ------------------------------------------------------------
+    # Step 5: Build feature matrix.
     X = []
     y = []
     epitope_ids = []
@@ -589,9 +573,7 @@ def main():
     y = np.array(y)
     epitope_ids = np.array(epitope_ids)
 
-    # ------------------------------------------------------------
-    # 7) Epitope-held-out split (CRITICAL)
-    # ------------------------------------------------------------
+    # Step 6: Epitope-held-out split.
     unique_eps = np.unique(epitope_ids)
 
     train_eps, test_eps = train_test_split(
@@ -604,9 +586,7 @@ def main():
     X_train, X_test = X[train_mask], X[test_mask]
     y_train, y_test = y[train_mask], y[test_mask]
 
-    # ------------------------------------------------------------
-    # 8) Train interpretable model
-    # ------------------------------------------------------------
+    # Step 7: Train interpretable model.
     clf = DecisionTreeClassifier(
         max_depth=20,
         min_samples_leaf=2,
@@ -615,9 +595,7 @@ def main():
 
     clf.fit(X_train, y_train)
 
-    # ------------------------------------------------------------
-    # 9) Evaluate on unseen epitopes
-    # ------------------------------------------------------------
+    # Step 8: Evaluate on unseen epitopes.
     y_pred = clf.predict(X_test)
     y_prob = clf.predict_proba(X_test)[:,1]
 
@@ -631,7 +609,7 @@ def main():
         import matplotlib.pyplot as plt
         from sklearn.tree import plot_tree
 
-        plt.figure(figsize=(50, 20))  # Taller layout for readability
+        plt.figure(figsize=(50, 20))  # Taller layout for readability.
         plot_tree(
             clf,
             feature_names=X.columns,
@@ -679,8 +657,8 @@ def main():
     print("\nDNF:")
     print(rules_to_dnf(rules)[0:100])
 
-    # choose an unseen peptide (string) you want rules for
-    unseen_pep = "GLCTLVAML" #"CASSALASGGDTQYF" # example; use your peptide of interest
+    # Example peptide for rule display.
+    unseen_pep = "GLCTLVAML" # example; use your peptide of interest
     unseen_pep_core = center5(unseen_pep)
     if unseen_pep_core is None:
         raise ValueError("Peptide must be at least 5 amino acids long.")
@@ -697,9 +675,7 @@ def main():
     print("Number of positive clauses (for this peptide):", len(clauses_tcr))
     print(formula_tcr_only[0:100])
 
-    # -------------------------
-    # Run (simulator) + compare to brute force
-    # -------------------------
+    # Step 9: Run simulator and compare to brute force.
     peptide = "GLCTLVAML"  # replace
 
     clauses = clauses_for_peptide(peptide)
@@ -709,7 +685,7 @@ def main():
     M, sols = brute_force_solutions(expanded_clauses, limit_print=8)
     N = 2**10
 
-    # Good iteration heuristic
+    # Grover iteration heuristic.
     iters = max(1, int(round((math.pi / 4) * math.sqrt(N / max(1, M)))))
     print(f"[grover] Using iters = {iters} (based on M={M})")
 
@@ -725,16 +701,17 @@ def main():
     counts = res.get_counts()
 
     def key_to_c0_to_c11(key: str) -> str:
-        # Qiskit returns c11..c0 as a string; reverse to get c0..c11
+        """Convert Qiskit c11..c0 output to c0..c11 order."""
         return key[::-1]
 
     def split_data_and_checks(key: str) -> Tuple[str, str]:
+        """Split a measurement key into data bits and check bits."""
         c = key_to_c0_to_c11(key)
         data10 = c[:10]       # c0..c9 corresponds to q0..q9 measurements
         checks = c[10:12]     # c10..c11 corresponds to q10,q11 checks
         return data10, checks
 
-    # Raw VALID rate (ignoring checks)
+    # Raw valid rate (ignoring checks).
     valid_shots = 0
     for key, ct in counts.items():
         data10, _ = split_data_and_checks(key)
@@ -742,7 +719,7 @@ def main():
             valid_shots += ct
     print(f"\nVALID shots (raw) = {valid_shots} / {num_shots}  ({valid_shots/num_shots:.3f})")
 
-    # Postselected VALID rate (keep only checks==00)
+    # Postselected valid rate (keep only checks==00).
     kept_shots = 0
     valid_kept_shots = 0
     for key, ct in counts.items():
@@ -783,58 +760,58 @@ def main():
         'Category': [aa2grp(aa_map_short_to_1_letter[aa]) for aa in aa_validation.index]
     })
 
-    # Create a mapping from single-letter amino acid codes to their categories
+    # Map single-letter amino acids to their categories.
     single_letter_to_category_map = {
         aa_map_short_to_1_letter[aa_name]: category
         for aa_name, category in zip(aa_categories['Amino Acid'], aa_categories['Category'])
     }
 
-    # Define the categories
+    # Define the categories.
     categories = ['H', 'P', '+', '-']
 
-    # Initialize an empty DataFrame for the category-averaged matrix
+    # Initialize a category-averaged interaction matrix.
     category_avg_matrix = pd.DataFrame(index=categories, columns=categories, dtype=float)
 
-    # Populate the matrix by calculating averages for each category pair
+    # Populate the matrix by averaging interaction energies per category pair.
     for row_cat in categories:
-        # Get all single-letter AAs belonging to the current row category
+        # Get all single-letter AAs belonging to the current row category.
         row_aas = [aa_char for aa_char, cat in single_letter_to_category_map.items() if cat == row_cat]
 
         for col_cat in categories:
-            # Get all single-letter AAs belonging to the current column category
+            # Get all single-letter AAs belonging to the current column category.
             col_aas = [aa_char for aa_char, cat in single_letter_to_category_map.items() if cat == col_cat]
 
-            # Ensure there are amino acids for both categories before attempting to slice
+            # Ensure there are amino acids for both categories before slicing.
             if row_aas and col_aas:
-                # Extract the sub-matrix of interaction energies
+                # Extract the sub-matrix of interaction energies.
                 sub_matrix = aa_validation_1_letter.loc[row_aas, col_aas]
 
-                # Calculate the average and store it in the new matrix
+                # Calculate the average and store it.
                 category_avg_matrix.loc[row_cat, col_cat] = sub_matrix.mean().mean()
             else:
-                # If no amino acids exist for a category, set the value to NaN
+                # If no amino acids exist for a category, set NaN.
                 category_avg_matrix.loc[row_cat, col_cat] = float('nan')
     category_avg_matrix_abs= np.abs(category_avg_matrix)
 
     start_index = (len(peptide) - 5) // 2
     end_index = start_index + 5
 
-    # 3. Extract this 5-amino acid core
+    # Extract the 5-amino acid core.
     peptide_5_core = peptide[start_index:end_index]
     print(f"Original peptide: {peptide}")
     print(f"Extracted 5-amino acid core: {peptide_5_core}")
 
-    # 4. For each amino acid in the peptide_5_core, convert it into its category
-    # 5. Store these 5 categories in a list
+    # Convert the peptide core to categories.
     peptide_5_core_categories = [aa2grp(aa) for aa in peptide_5_core]
 
     def score_solution(solution_bits: str, peptide_core_categories: List[str]) -> float:
+        """Score a solution by category interaction energy."""
         decoded_categories = decode_10bit_to_classes(solution_bits)
         score = 0.0
         for i in range(5):
             sol_cat = decoded_categories[i]
             core_cat = peptide_core_categories[i]
-            # Get interaction energy from the absolute value matrix
+            # Use the absolute interaction energy for scoring.
             interaction_energy = category_avg_matrix_abs.loc[sol_cat, core_cat]
             score += interaction_energy
         return score
@@ -852,7 +829,7 @@ def main():
             f"{decode_10bit_to_classes(data10)}  {tag}  BIO={bio_score:.3f}"
         )
 
-    #### select the solution with highest measurement among valid+checked and the highest bio score
+    # Select the solution with highest count and highest bio score.
     valid_checked_solutions = []
     for key, ct in counts.items():
         data10, checks = split_data_and_checks(key)
@@ -878,19 +855,17 @@ def main():
     from itertools import product
 
     def expand_groups(group_string):
-        """
-        group_string: e.g. 'HHHP+'
-        returns all amino acid strings consistent with it
-        """
+        """Return all amino-acid strings consistent with a group pattern."""
         choices = [groups[g] for g in group_string]
         for combo in product(*choices):
             yield "".join(combo)
     candidates = list(expand_groups(best_sol_classes))
     print(f"\nTotal candidate sequences from best solution: {len(candidates)}")
 
-    #compute the score as in bio score but with actual amino acids table comparing the canditates with peptide_5_core
+    # Score candidates using the full amino-acid interaction table.
     aa_validation_abs = np.abs(aa_validation_1_letter)
     def score_candidate(candidate: str, peptide_core: str) -> float:
+        """Score a concrete amino-acid candidate against the peptide core."""
         score = 0.0
         for i in range(5):
             aa_sol = candidate[i]
