@@ -22,10 +22,10 @@ np.random.seed(SEED)
 VISUALIZE_TREE = False
 SHOW_CONFUSION_MATRIX = False
 
-### Create decision tree
+### Helpers and configuration (used by main)
 
 # ------------------------------------------------------------
-# 2) Detect epitope + MHC columns
+# Column detection helper
 # ------------------------------------------------------------
 def find_col(columns, tokens):
     for c in columns:
@@ -35,7 +35,7 @@ def find_col(columns, tokens):
     return None
 
 # ------------------------------------------------------------
-# 4) Define feature encoders
+# Feature encoding helpers
 # ------------------------------------------------------------
 plus  = set("KRH")
 minus = set("DE")
