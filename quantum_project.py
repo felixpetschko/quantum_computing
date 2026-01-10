@@ -869,7 +869,7 @@ def main(peptide=None):
         best_data10, best_count, best_bio_score = best_solution
         best_sol_classes = decode_10bit_to_classes(best_data10)
         print(
-            f"\nBest valid+checked solution: q0..q9={best_data10}  "
+            f"\nHighest shot count valid+checked solution: q0..q9={best_data10}  "
             f"{best_sol_classes}  count={best_count}  BIO={best_bio_score:.3f}"
         )
     else:
@@ -890,7 +890,10 @@ def main(peptide=None):
         for combo in product(*choices):
             yield "".join(combo)
     candidates = list(expand_groups(best_sol_classes))
-    print(f"\nTotal candidate sequences from best solution: {len(candidates)}")
+    print(
+        "\nTotal number of possible candidate amino acid sequences following the pattern of "
+        f"the highest shot count solution: {len(candidates)}"
+    )
 
     # Score candidates using the full amino-acid interaction table.
     aa_validation_abs = np.abs(aa_validation_1_letter)
