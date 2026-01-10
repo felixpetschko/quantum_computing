@@ -35,3 +35,17 @@ For many inputs you can't find binding sequences. For testing, one could try the
 - QWERTYVSL
 - MVACTRLGH
 - KHVLTAGMR
+
+Running the code succesfully should print a list with the best CDR3 candidate sequences in the console, e.g.:
+
+Top candidate sequences by bio score:
+  DHCCE  BIO=10.370
+  DHCCD  BIO=10.290
+  DRCCE  BIO=10.140
+  DRCCD  BIO=10.060
+  EHCCE  BIO=10.030
+  DKCCE  BIO=10.000
+  EHCCD  BIO=9.950
+  DKCCD  BIO=9.920
+  ERCCE  BIO=9.800
+  ERCCD  BIO=9.720
