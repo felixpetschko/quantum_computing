@@ -2,9 +2,9 @@
 
 ## Biological Use Case
 
-T-cells are a crucial part of the immune system and they can detect cancer cells and pathogens. They do that with receptors at their surface that bind to certain types of molecules called antigens. A very important part of the T-cell receptor (TCR) is the CDR3 region that is a sequence of around 15 amino acids (20 different amino acids possible per position). This sequence mainly determines which antigens a receptor can bind to.
+T-cells are a crucial part of the immune system and they can detect cancer cells and pathogens. They recognize disease-associated signals through T-cell receptors (TCRs) on their surface, which bind to short peptide antigens presented by major histocompatibility complex (MHC) molecules. A very important part of the T-cell receptor (TCR) is the CDR3 region that is a sequence of around 15 amino acids (20 different amino acids possible per position). This region contributes most strongly to antigen specificity and largely determines which peptide–MHC complexes a TCR can recognize.
 
-TCR-engineered T-cells are genetically modified T-cells with a specifically designed TCR so that they can recognize disease-related antigens, e.g. cancer antigens. To create these cells we need to know which CDR3 sequence would bind to which antigen. The goal of our project is to use quantum computing to find binding CDR3 sequences for a given antigen peptide (short chain of amino acids). 
+TCR-engineered T-cells are genetically modified T-cells that express a selected or engineered TCR so that they can recognize disease-related antigens, e.g. cancer antigens. To generate such cells it is essential to identify their TCR sequence, especially that in the CDR3 region that can bind a given peptide-MHC complex. The goal of our project is to use quantum computing to find binding candidate CDR3 sequences for a given antigen peptide (short chain of amino acids). 
 
 
 ## Summary of Approach
@@ -13,5 +13,4 @@ First, we load a database of known T-cell receptor sequences with the according 
 
 Due to the quantum hardware limitations, we only consider the 5 core positions of the sequences. Our assumption is that the binding rules for longer amino acid sequences that can be learned with some machine learning approach or that are given by some biology expert might give us a satisfiability problem that is NP-hard and could take very long to solve. In that case, quantum computing could give quadratic speedup compared to classical hardware. With this project, we showcase a full example pipeline from a database of known binding sequences to a candidate solution of a CDR3 sequence that recognizes an unseen antigen. Finding such binding sequences would solve an important problem in TCR T-cell engineering.
 
-The necessary libraries can be installed into a conda environment with the according .yml environment file. The code (quantum_project.py) was tested with the Qiskit simulator on the Leo5 HPC cluster. 
-
+The necessary libraries can be installed into a conda environment with the according .yml environment file. The code (quantum_project.py) was tested with the Qiskit simulator on the Leo5 HPC cluster.
