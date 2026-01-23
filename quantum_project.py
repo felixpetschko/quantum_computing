@@ -12,7 +12,7 @@ import pandas as pd
 import scirpy as ir
 from qiskit import QuantumCircuit, transpile
 from qiskit.circuit.library import MCXGate
-from qiskit_aer import Aer
+from qiskit_aer import Aer, AerSimulator
 from sklearn.metrics import roc_auc_score, accuracy_score
 from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeClassifier
@@ -26,7 +26,9 @@ VISUALIZE_TREE = False
 SHOW_CONFUSION_MATRIX = False
 SHOW_TREE_TEXT = False
 MAX_RULES_TO_PRINT = 20
+TREE_MAX_DEPTH = 5
 DEFAULT_PEPTIDE = "GILVAMTFC"
+USE_HANDCRAFTED_RULE = False
 
 ### Helpers and configuration
 
@@ -234,7 +236,8 @@ def clauses_for_peptide(peptide):
         plus=plus, minus=minus, hydro=hydro, polar=polar
     )
     clauses = conditioned_tree_to_dnf_over_tcr(clf, list(X.columns), fixed_pep, positive_class=1)
-    clauses = apply_same_anchor_rule(clauses)
+    if USE_HANDCRAFTED_RULE:
+        clauses = apply_same_anchor_rule(clauses)
 
     return clauses
 
@@ -493,11 +496,24 @@ def build_grover_circuit_from_clauses(clauses, iters: int) -> QuantumCircuit:
         qc.append(oracle, range(12))
         qc.append(diff, range(12))
 
-    add_anchor_parity_checks(qc, check1=check1, check2=check2)
+    if USE_HANDCRAFTED_RULE:
+        add_anchor_parity_checks(qc, check1=check1, check2=check2)
     qc.measure(data, list(range(10)))
     qc.measure(check1, 10)
     qc.measure(check2, 11)
     return qc
+
+
+def estimate_physical_gates(qc: QuantumCircuit):
+    """Estimate physical gate count by decomposing to a u3/cx basis."""
+    qc2 = qc.decompose(reps=10)
+    backend = AerSimulator()
+    tqc = transpile(qc2, backend=backend, basis_gates=["u3", "cx"], optimization_level=0)
+    ops = tqc.count_ops()
+    total = sum(ops.values())
+    print("[grover] Physical gate estimate (u3/cx basis):", total)
+    print("[grover] Physical gate breakdown (u3/cx basis):", ops)
+    return ops, tqc.depth(), total
 
 
 def main(peptide=None):
@@ -602,7 +618,7 @@ def main(peptide=None):
 
     #Train interpretable model.
     clf = DecisionTreeClassifier(
-        max_depth=20,
+        max_depth=TREE_MAX_DEPTH,
         min_samples_leaf=2,
         random_state=0
     )
@@ -683,7 +699,8 @@ def main(peptide=None):
     )
 
     clauses_tcr = conditioned_tree_to_dnf_over_tcr(clf, list(X.columns), fixed_pep, positive_class=1)
-    clauses_tcr = apply_same_anchor_rule(clauses_tcr)
+    if USE_HANDCRAFTED_RULE:
+        clauses_tcr = apply_same_anchor_rule(clauses_tcr)
     formula_tcr_only = dnf_to_string(clauses_tcr)
 
     if SHOW_TREE_TEXT:
@@ -719,7 +736,6 @@ def main(peptide=None):
 
     qc = build_grover_circuit_from_clauses(expanded_clauses, iters=iters)
     predicate = lambda data10: predicate_from_clauses(data10, expanded_clauses)
-    print("[grover] Circuit qubits:", qc.num_qubits)
 
     backend = Aer.get_backend("aer_simulator")
     tqc = transpile(qc, backend=backend, optimization_level=1, seed_transpiler=SEED)
@@ -747,21 +763,23 @@ def main(peptide=None):
             valid_shots += ct
     print(f"\nVALID shots (raw) = {valid_shots} / {num_shots}  ({valid_shots/num_shots:.3f})")
 
-    # Postselected valid rate (keep only checks==00).
-    kept_shots = 0
-    valid_kept_shots = 0
-    for key, ct in counts.items():
-        data10, checks = split_data_and_checks(key)
-        if checks == "00":
-            kept_shots += ct
-            if predicate(data10):
-                valid_kept_shots += ct
+    if USE_HANDCRAFTED_RULE:
+        # Postselected valid rate (keep only checks==00).
+        kept_shots = 0
+        valid_kept_shots = 0
+        for key, ct in counts.items():
+            data10, checks = split_data_and_checks(key)
+            if checks == "00":
+                kept_shots += ct
+                if predicate(data10):
+                    valid_kept_shots += ct
 
-    if kept_shots > 0:
-        print(f"Postselected on checks==00: kept = {kept_shots} / {num_shots}  ({kept_shots/num_shots:.3f})")
-        print(f"VALID among kept = {valid_kept_shots} / {kept_shots}  ({valid_kept_shots/kept_shots:.3f})")
-    else:
-        print("Postselected on checks==00: kept = 0 (no shots passed checks)")
+        if kept_shots > 0:
+            print(f"Postselected on checks==00: kept = {kept_shots} / {num_shots}  ({kept_shots/num_shots:.3f})")
+            print(f"VALID among kept = {valid_kept_shots} / {kept_shots}  ({valid_kept_shots/kept_shots:.3f})")
+        else:
+            print("Postselected on checks==00: kept = 0 (no shots passed checks)")
+
 
     shots = sum(counts.values())
     baseline = shots / (2**10)
@@ -914,6 +932,13 @@ def main(peptide=None):
     print("\nTop candidate sequences by bio score:")
     for cand, bio_score in scored_candidates[:10]:
         print(f"  {cand}  BIO={bio_score:.3f}")
+
+    print("\nPeptide-conditioned DNF:")
+    print(f"clauses={len(clauses_tcr)}, length={len(formula_tcr_only)}")
+    print("[grover] Circuit qubits:", qc.num_qubits)
+    estimate_physical_gates(qc)
+
+
 
 
 if __name__ == "__main__":
