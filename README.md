@@ -19,11 +19,11 @@ The necessary libraries can be installed into a conda environment with the accor
 You can run the code with:
 
 ```bash
-python quantum_project.py --peptide GILVAMTFC
+python quantum_project.py --peptide ATVGLMPHR
 ```
 
 The `--peptide` input parameter specifies the peptide for which we want to find a binding CDR3 sequence.
-For many inputs you can't find binding sequences. For testing, one could try the following inputs for which we found solutions:
+Be aware the for many inputs you can't find binding sequences. For testing, one could try the following inputs:
 
 - `GILVAMTFC`
 - `DVWQKSLTM`
